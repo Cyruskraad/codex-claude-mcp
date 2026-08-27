@@ -8,6 +8,7 @@ export default defineConfig({
   },
   format: ['esm'],
   noExternal: [/.*/],
+  splitting: false,
   outExtension: () => ({ js: '.mjs' }),
   outDir: 'plugins/codex-claude-mcp/dist',
   sourcemap: true,

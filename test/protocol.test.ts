@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -8,6 +9,12 @@ import { describe, expect, it } from 'vitest';
 const repositoryRoot = resolve(import.meta.dirname, '..');
 const serverBundle = join(repositoryRoot, 'plugins/codex-claude-mcp/dist/server.mjs');
 const fakeClaude = join(repositoryRoot, 'test/fixtures/fake-claude.mjs');
+type ProtocolSchema = Record<string, unknown> & {
+  properties: Record<string, ProtocolSchema>;
+  anyOf: ProtocolSchema[];
+  required?: string[];
+  additionalProperties?: boolean;
+};
 
 async function withProtocolClient<T>(
   action: (client: Client) => Promise<T>,
@@ -59,6 +66,38 @@ async function waitForTerminal(client: Client, jobId: string): Promise<Record<st
   throw new Error('Fake Claude job did not reach a terminal state.');
 }
 
+async function runServerUntilStdioEof(
+  stateRoot: string,
+  environment: Record<string, string>,
+): Promise<{ pid: number; code: number | null; signal: NodeJS.Signals | null; stderr: string }> {
+  return new Promise((resolveExit, rejectExit) => {
+    const child = spawn(process.execPath, [serverBundle], {
+      cwd: repositoryRoot,
+      env: {
+        HOME: process.env.HOME ?? tmpdir(), PATH: process.env.PATH ?? '',
+        CODEX_CLAUDE_MCP_STATE_DIR: stateRoot, ...environment,
+      },
+      shell: false,
+      stdio: ['pipe', 'ignore', 'pipe'],
+    });
+    const pid = child.pid!;
+    let stderr = '';
+    child.stderr.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString('utf8').slice(0, Math.max(0, 8_192 - stderr.length));
+    });
+    const timeout = setTimeout(() => {
+      child.kill('SIGKILL');
+      rejectExit(new Error('Raw stdio server did not exit after EOF.'));
+    }, 3_000);
+    child.once('error', rejectExit);
+    child.once('close', (code, signal) => {
+      clearTimeout(timeout);
+      resolveExit({ pid, code, signal, stderr });
+    });
+    child.stdin.end();
+  });
+}
+
 describe('built MCP protocol', () => {
   it('initializes with durable-work instructions and exactly seven accurately annotated tools', async () => {
     await withProtocolClient(async (client) => {
@@ -100,13 +139,84 @@ describe('built MCP protocol', () => {
 
       const task = tools.find((tool) => tool.name === 'claude_task')!;
       expect(task.inputSchema.required).toEqual(['workspace', 'prompt']);
-      expect(task.inputSchema.properties).toMatchObject({
+      const taskProperties = (task.inputSchema as unknown as ProtocolSchema).properties;
+      expect(taskProperties).toMatchObject({
         prompt: { minLength: 1, maxLength: 100000 },
-        access: { default: 'inspect' },
+        access: { enum: ['inspect', 'write'], default: 'inspect' },
+        model: { maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}$' },
+        effort: { enum: ['low', 'medium', 'high', 'xhigh', 'max'] },
         max_turns: { minimum: 1, maximum: 100, default: 20 },
       });
+      expect(taskProperties.execution).toEqual({
+        type: 'object',
+        properties: {
+          mode: { type: 'string', enum: ['auto', 'sync', 'async'], default: 'auto' },
+          wait_seconds: { type: 'integer', minimum: 0, maximum: 45, default: 45 },
+          timeout_seconds: { type: 'integer', minimum: 30, maximum: 7200, default: 1800 },
+        },
+        additionalProperties: false,
+        default: { mode: 'auto', wait_seconds: 45, timeout_seconds: 1800 },
+      });
+      expect(taskProperties.session.default).toEqual({ mode: 'new' });
+      expect(taskProperties.session.anyOf.map((variant) => ({
+        mode: variant.properties.mode.const,
+        required: variant.required,
+        strict: variant.additionalProperties,
+      }))).toEqual([
+        { mode: 'new', required: ['mode'], strict: false },
+        { mode: 'resume', required: ['mode', 'session_id'], strict: false },
+        { mode: 'cloud_create', required: ['mode'], strict: false },
+        { mode: 'cloud_attach', required: ['mode', 'target'], strict: false },
+      ]);
+      expect(taskProperties.session.anyOf[1].properties.session_id).toMatchObject({ minLength: 1, maxLength: 512 });
+      expect(taskProperties.session.anyOf[2].properties.description).toMatchObject({ minLength: 1, maxLength: 256 });
+
       const continuation = tools.find((tool) => tool.name === 'claude_job_continue')!;
       expect(Object.keys(continuation.inputSchema.properties ?? {}).sort()).toEqual(['execution', 'job_id', 'prompt']);
+      expect((continuation.inputSchema as unknown as ProtocolSchema).properties.execution).toMatchObject({
+        additionalProperties: false,
+        properties: {
+          mode: { enum: ['auto', 'sync', 'async'], default: 'auto' },
+          wait_seconds: { minimum: 0, maximum: 45, default: 45 },
+          timeout_seconds: { minimum: 30, maximum: 7200, default: 1800 },
+        },
+      });
+      for (const name of ['claude_job_status', 'claude_job_cancel', 'claude_job_forget']) {
+        const schema = tools.find((tool) => tool.name === name)!.inputSchema;
+        expect(schema.properties?.job_id).toMatchObject({ minLength: 1, maxLength: 512 });
+      }
+      const resultTool = tools.find((tool) => tool.name === 'claude_job_result')!;
+      expect(resultTool.inputSchema.properties).toMatchObject({
+        job_id: { minLength: 1, maxLength: 512 }, cursor: { minLength: 1, maxLength: 4096 },
+      });
+
+      const statusOutput = tools.find((tool) => tool.name === 'claude_job_status')!.outputSchema as unknown as ProtocolSchema;
+      expect(statusOutput.properties.job).toMatchObject({
+        additionalProperties: false,
+        properties: {
+          id: { minLength: 1, maxLength: 128 },
+          state: { enum: ['queued', 'running', 'succeeded', 'failed', 'cancelled', 'timed_out', 'output_limited', 'orphaned'] },
+          max_turns: { minimum: 1, maximum: 100 },
+          claude_session_id: { minLength: 1, maxLength: 512 },
+          result_preview: { maxLength: 4096 },
+          usage: { additionalProperties: false },
+          error: { additionalProperties: false },
+        },
+      });
+      expect(statusOutput.properties.progress_tail).toMatchObject({ maxItems: 20, items: { maxLength: 1024 } });
+      expect((resultTool.outputSchema as unknown as ProtocolSchema).properties.next_cursor).toMatchObject({ minLength: 1, maxLength: 4096 });
+
+      const healthOutput = tools[0].outputSchema as unknown as ProtocolSchema;
+      for (const nested of ['cli', 'features', 'authentication', 'bridge']) {
+        expect(healthOutput.properties[nested].additionalProperties).toBe(false);
+      }
+      expect(healthOutput.properties.status.enum).toEqual(['ready', 'degraded', 'unavailable']);
+      expect(healthOutput.properties.cli.properties.version_status.enum).toEqual([
+        'supported', 'too_old', 'malformed', 'timeout', 'not_found', 'not_executable',
+      ]);
+      expect(healthOutput.properties.authentication.properties.status.enum).toEqual([
+        'ready', 'not_ready', 'expired', 'unknown', 'timeout', 'not_checked',
+      ]);
     });
   });
 
@@ -157,6 +267,58 @@ describe('built MCP protocol', () => {
       expect((result.structuredContent as { issues: string[] }).issues).toContain(issue);
       expect(JSON.stringify(result)).not.toContain('person@example.test');
     }, { CODEX_CLAUDE_MCP_CLAUDE_PATH: fakeClaude, ...scenario });
+  });
+
+  it.each([
+    ['a hanging version probe', { FAKE_VERSION_SCENARIO: 'hang' }],
+    ['an output-limited version probe', { FAKE_VERSION_SCENARIO: 'flood' }],
+  ] as const)('bounds built-bundle health for %s', async (_name, scenario) => {
+    const started = Date.now();
+    await withProtocolClient(async (client) => {
+      const result = await client.callTool({ name: 'claude_health', arguments: {} });
+      expect(result.structuredContent).toMatchObject({ status: 'degraded', cli: { version_status: 'timeout' } });
+      expect((result.structuredContent as { issues: string[] }).issues).toContain('probe_timeout');
+    }, { CODEX_CLAUDE_MCP_CLAUDE_PATH: fakeClaude, ...scenario });
+    expect(Date.now() - started).toBeLessThan(4_000);
+  });
+
+  it.each([
+    ['version', { FAKE_VERSION_EXIT: '7' }, 'malformed', 'version_malformed'],
+    ['help', { FAKE_HELP_EXIT: '7' }, 'supported', 'required_feature_missing'],
+  ] as const)('requires exit zero from built %s probe', async (_name, scenario, versionStatus, issue) => {
+    await withProtocolClient(async (client) => {
+      const result = await client.callTool({ name: 'claude_health', arguments: {} });
+      expect(result.structuredContent).toMatchObject({ status: 'degraded', cli: { version_status: versionStatus } });
+      expect((result.structuredContent as { issues: string[] }).issues).toContain(issue);
+    }, { CODEX_CLAUDE_MCP_CLAUDE_PATH: fakeClaude, ...scenario });
+  });
+
+  it.each([
+    [{ mode: 'resume', session_id: 'sess_explicit' }, ['--resume', 'sess_explicit']],
+    [{ mode: 'cloud_create', description: 'Cloud description' }, ['--cloud', '--name', 'Cloud description']],
+    [{ mode: 'cloud_attach', target: 'cloud_target' }, ['--cloud', 'cloud_target']],
+  ] as const)('runs built session form %o with exact arguments', async (session, expectedArguments) => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'codex-claude-protocol-session-')));
+    const workspace = join(root, 'workspace');
+    const control = join(root, 'control');
+    await Promise.all([mkdir(workspace), mkdir(control)]);
+    await withProtocolClient(async (client) => {
+      const result = await client.callTool({
+        name: 'claude_task',
+        arguments: {
+          workspace, prompt: 'session form secret', session, model: 'claude-full-model-id', effort: 'max',
+          execution: { mode: 'sync', timeout_seconds: 30 },
+        },
+      });
+      expect(result.isError).not.toBe(true);
+      const args = JSON.parse(await readFile(join(control, 'argv.json'), 'utf8')) as string[];
+      expect(args).toEqual(expect.arrayContaining([...expectedArguments, '--model', 'claude-full-model-id', '--effort', 'max']));
+      expect(args).not.toContain('session form secret');
+    }, {
+      CODEX_CLAUDE_MCP_CLAUDE_PATH: fakeClaude,
+      FAKE_CLAUDE_CONTROL_DIR: control,
+      FAKE_CLAUDE_SCENARIO: 'success',
+    });
   });
 
   it.each([
@@ -382,6 +544,10 @@ describe('built MCP protocol', () => {
       });
       jobId = structured<{ job: { id: string } }>(result).job.id;
     }, environment, stateRoot);
+    expect((await stat(join(stateRoot, 'jobs', jobId, 'state.json'))).isFile()).toBe(true);
+    const rawExit = await runServerUntilStdioEof(stateRoot, environment);
+    expect(rawExit).toMatchObject({ code: 0, signal: null, stderr: '' });
+    expect(() => process.kill(rawExit.pid, 0)).toThrow(expect.objectContaining({ code: 'ESRCH' }));
     expect((await stat(join(stateRoot, 'jobs', jobId, 'state.json'))).isFile()).toBe(true);
     await withProtocolClient(async (client) => {
       const status = await client.callTool({ name: 'claude_job_status', arguments: { job_id: jobId } });

@@ -1,8 +1,9 @@
-import { spawn } from 'node:child_process';
 import { realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { isAbsolute, parse, resolve } from 'node:path';
+import { runBoundedProcess } from './bounded-process.js';
 import { ClaudeContractError } from './contracts.js';
+import { resolvePathExecutable } from './executable-resolution.js';
 
 export class WorkspacePolicyError extends ClaudeContractError {}
 
@@ -24,36 +25,35 @@ export interface ValidatedWorkspace {
   canonicalPath: string;
 }
 
-/** Uses Git's own worktree state rather than trusting a filesystem marker. */
-export async function probeGitWorktree(workspace: string): Promise<GitProbeResult> {
-  return new Promise((resolveProbe) => {
-    let child;
-    try {
-      child = spawn('git', ['rev-parse', '--is-inside-work-tree', '--is-inside-git-dir'], {
-        cwd: workspace,
-        shell: false,
-        stdio: ['ignore', 'pipe', 'ignore'],
-        windowsHide: true,
-      });
-    } catch {
-      resolveProbe({ isWorkTree: false, isInsideGitDir: false });
-      return;
-    }
+export interface GitProbeOptions {
+  environment?: NodeJS.ProcessEnv;
+  timeoutMilliseconds?: number;
+  outputLimitBytes?: number;
+  killGraceMilliseconds?: number;
+}
 
-    let stdout = '';
-    child.stdout.on('data', (chunk: Buffer) => {
-      if (stdout.length < 128) stdout += chunk.toString('utf8').slice(0, 128 - stdout.length);
-    });
-    child.once('error', () => resolveProbe({ isWorkTree: false, isInsideGitDir: false }));
-    child.once('close', (code) => {
-      if (code !== 0) {
-        resolveProbe({ isWorkTree: false, isInsideGitDir: false });
-        return;
-      }
-      const [isWorkTree, isInsideGitDir] = stdout.trim().split(/\s+/);
-      resolveProbe({ isWorkTree: isWorkTree === 'true', isInsideGitDir: isInsideGitDir === 'true' });
-    });
+/** Uses Git's own worktree state rather than trusting a filesystem marker. */
+export async function probeGitWorktree(
+  workspace: string,
+  options: GitProbeOptions = {},
+): Promise<GitProbeResult> {
+  const environment = options.environment ?? process.env;
+  const git = await resolvePathExecutable('git', environment);
+  if (!git.found) return { isWorkTree: false, isInsideGitDir: false };
+  const result = await runBoundedProcess({
+    executable: git.path,
+    args: ['rev-parse', '--is-inside-work-tree', '--is-inside-git-dir'],
+    cwd: workspace,
+    environment,
+    timeoutMilliseconds: options.timeoutMilliseconds ?? 2_000,
+    outputLimitBytes: options.outputLimitBytes ?? 4_096,
+    killGraceMilliseconds: options.killGraceMilliseconds ?? 100,
   });
+  if (result.code !== 0 || result.timedOut || result.outputLimited) {
+    return { isWorkTree: false, isInsideGitDir: false };
+  }
+  const [isWorkTree, isInsideGitDir] = result.output.trim().split(/\s+/);
+  return { isWorkTree: isWorkTree === 'true', isInsideGitDir: isInsideGitDir === 'true' };
 }
 
 export async function isInsideGitWorktree(canonicalPath: string, gitProbe: GitProbe = probeGitWorktree): Promise<boolean> {

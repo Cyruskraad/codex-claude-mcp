@@ -17,7 +17,7 @@ if (process.argv.includes('--version')) {
     await new Promise(() => undefined);
   }
   process.stdout.write(process.env.FAKE_CLAUDE_VERSION ?? '2.1.0 (Claude Code)\n');
-  process.exit(0);
+  process.exit(Number(process.env.FAKE_VERSION_EXIT ?? 0));
 }
 
 if (process.argv.includes('--help')) {
@@ -43,7 +43,7 @@ if (process.argv.includes('--help')) {
     '--resume', '--cloud', '--name', '--mcp-config', '--strict-mcp-config', '--disallowedTools',
   ].join('\n');
   process.stdout.write(process.env.FAKE_CLAUDE_HELP ?? completeHelp);
-  process.exit(0);
+  process.exit(Number(process.env.FAKE_HELP_EXIT ?? 0));
 }
 
 if (process.argv[2] === 'auth' && process.argv[3] === 'status') {

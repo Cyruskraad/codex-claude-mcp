@@ -1,8 +1,7 @@
-import { spawn } from 'node:child_process';
-import { constants } from 'node:fs';
-import { access, realpath, stat } from 'node:fs/promises';
+import { realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { delimiter, isAbsolute, join } from 'node:path';
+import { runBoundedProcess, type BoundedProcessResult } from './bounded-process.js';
+import { resolveClaudeExecutable } from './executable-resolution.js';
 import type { ClaudeHealth } from './protocol.js';
 
 const MINIMUM_VERSION = [2, 1, 0] as const;
@@ -10,7 +9,7 @@ const MINIMUM_VERSION_TEXT = '2.1.0' as const;
 const MODEL_ALIASES = ['sonnet', 'opus', 'haiku', 'fable'] as const;
 const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 
-type ProbeResult = { code: number | null; timedOut: boolean; outputLimited: boolean; output: string };
+type ProbeResult = BoundedProcessResult;
 type FeatureSet = ClaudeHealth['features'];
 
 export interface ClaudeHealthOptions {
@@ -27,15 +26,6 @@ const emptyFeatures = (): FeatureSet => ({
   cloud_sessions: false, mcp_config: false, strict_mcp_config: false, disable_nested_mcp: false,
 });
 
-function signalGroup(pid: number, signal: NodeJS.Signals): boolean {
-  try { process.kill(-pid, signal); return true; }
-  catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === 'ESRCH') return true;
-    return false;
-  }
-}
-
 async function runProbe(
   executable: string,
   args: string[],
@@ -44,91 +34,14 @@ async function runProbe(
   killGraceMilliseconds: number,
   environment: NodeJS.ProcessEnv,
 ): Promise<ProbeResult> {
-  return new Promise((resolveProbe) => {
-    let child;
-    try {
-      child = spawn(executable, args, {
-        detached: true, shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env: environment,
-      });
-    } catch {
-      resolveProbe({ code: null, timedOut: false, outputLimited: false, output: '' });
-      return;
-    }
-    let settled = false;
-    let stopping = false;
-    let timedOut = false;
-    let outputLimited = false;
-    let bytes = 0;
-    const chunks: Buffer[] = [];
-    let forceTimer: NodeJS.Timeout | undefined;
-    const stop = (reason: 'timeout' | 'output') => {
-      if (stopping || !child.pid) return;
-      stopping = true;
-      timedOut = reason === 'timeout';
-      outputLimited = reason === 'output';
-      child.stdout?.destroy();
-      child.stderr?.destroy();
-      if (!signalGroup(child.pid, 'SIGTERM')) child.kill('SIGTERM');
-      forceTimer = setTimeout(() => {
-        if (child.pid && !signalGroup(child.pid, 'SIGKILL')) child.kill('SIGKILL');
-      }, killGraceMilliseconds);
-      forceTimer.unref();
-    };
-    const timeout = setTimeout(() => stop('timeout'), timeoutMilliseconds);
-    timeout.unref();
-    const capture = (chunk: Buffer) => {
-      bytes += chunk.byteLength;
-      if (bytes > outputLimitBytes) { stop('output'); return; }
-      chunks.push(Buffer.from(chunk));
-    };
-    child.stdout?.on('data', capture);
-    child.stderr?.on('data', capture);
-    child.once('error', () => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout); if (forceTimer) clearTimeout(forceTimer);
-      resolveProbe({ code: null, timedOut, outputLimited, output: '' });
-    });
-    child.once('close', (code) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout); if (forceTimer) clearTimeout(forceTimer);
-      const output = Buffer.concat(chunks, Math.min(bytes, outputLimitBytes)).toString('utf8');
-      resolveProbe({ code, timedOut, outputLimited, output });
-    });
+  return runBoundedProcess({
+    executable,
+    args,
+    environment,
+    timeoutMilliseconds,
+    outputLimitBytes,
+    killGraceMilliseconds,
   });
-}
-
-async function executableFile(candidate: string): Promise<string | undefined> {
-  try {
-    const canonical = await realpath(candidate);
-    const metadata = await stat(canonical);
-    if (!metadata.isFile()) return undefined;
-    await access(canonical, constants.X_OK);
-    return canonical;
-  } catch { return undefined; }
-}
-
-type Discovery =
-  | { found: true; path: string; resolution: 'override' | 'path' }
-  | { found: false; resolution?: 'override'; status: 'not_found' | 'not_executable' };
-
-async function discoverClaude(environment: NodeJS.ProcessEnv): Promise<Discovery> {
-  const hasOverride = Object.prototype.hasOwnProperty.call(environment, 'CODEX_CLAUDE_MCP_CLAUDE_PATH');
-  if (hasOverride) {
-    const supplied = environment.CODEX_CLAUDE_MCP_CLAUDE_PATH ?? '';
-    if (!isAbsolute(supplied)) return { found: false, resolution: 'override', status: 'not_executable' };
-    const canonical = await executableFile(supplied);
-    if (canonical) return { found: true, path: canonical, resolution: 'override' };
-    try { await stat(supplied); return { found: false, resolution: 'override', status: 'not_executable' }; }
-    catch { return { found: false, resolution: 'override', status: 'not_found' }; }
-  }
-  for (const entry of (environment.PATH ?? '').split(delimiter)) {
-    if (!entry || !isAbsolute(entry)) continue;
-    const canonical = await executableFile(join(entry, 'claude'));
-    if (canonical) return { found: true, path: canonical, resolution: 'path' };
-  }
-  return { found: false, status: 'not_found' };
 }
 
 function displayPath(path: string, homeDirectory: string): string {
@@ -194,7 +107,7 @@ export async function probeClaudeHealth(options: ClaudeHealthOptions = {}): Prom
     supported_effort_levels: [...EFFORT_LEVELS] as ClaudeHealth['supported_effort_levels'],
     bridge: { running_jobs: counts.runningJobs, queued_jobs: counts.queuedJobs, concurrency_limit: 2 as const },
   };
-  const discovery = await discoverClaude(environment);
+  const discovery = await resolveClaudeExecutable(environment);
   if (!discovery.found) {
     const issue = discovery.status === 'not_found' ? 'cli_not_found' as const : 'cli_not_executable' as const;
     return {
@@ -212,6 +125,8 @@ export async function probeClaudeHealth(options: ClaudeHealthOptions = {}): Prom
   let versionStatus: ClaudeHealth['cli']['version_status'];
   if (versionProbe.timedOut || versionProbe.outputLimited) {
     versionStatus = 'timeout'; issues.push('probe_timeout');
+  } else if (versionProbe.code !== 0) {
+    versionStatus = 'malformed'; issues.push('version_malformed');
   } else {
     const parsed = parseVersion(versionProbe.output);
     version = parsed.version; versionStatus = parsed.status;
@@ -224,6 +139,7 @@ export async function probeClaudeHealth(options: ClaudeHealthOptions = {}): Prom
   if (versionStatus === 'supported') {
     const helpProbe = await runProbe(discovery.path, ['--help'], timeouts.help ?? 3_000, 65_536, grace, environment);
     if (helpProbe.timedOut || helpProbe.outputLimited) issues.push('probe_timeout');
+    else if (helpProbe.code !== 0) issues.push('required_feature_missing');
     else {
       features = parseFeatures(helpProbe.output);
       if (Object.values(features).some((supported) => !supported)) issues.push('required_feature_missing');

@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, readFile, stat } from 'node:fs/promises';
+import { access, chmod, mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -93,6 +93,41 @@ describe('detached Claude runner integration', () => {
     const job = (await store.read(running.job.id)).job;
     expect(job).toMatchObject({ state: 'failed', error: { code: 'claude-not-found' } });
     expect(JSON.stringify(job)).not.toContain('does-not-exist-private-name');
+  });
+
+  it.each([
+    ['empty PATH entry', '', undefined],
+    ['dot PATH entry', '.', undefined],
+    ['relative PATH entry', 'relative-bin', undefined],
+    ['relative explicit override', '/definitely/safe', './claude'],
+    ['empty explicit override', '/definitely/safe', ''],
+  ] as const)('never executes a repository Claude binary from %s', async (_name, pathValue, explicitOverride) => {
+    const { workspace, store, running } = await setup('success');
+    const executableDirectory = pathValue === 'relative-bin' ? join(workspace, 'relative-bin') : workspace;
+    await mkdir(executableDirectory, { recursive: true });
+    const marker = join(workspace, 'claude-executed');
+    const maliciousClaude = join(executableDirectory, 'claude');
+    await writeFile(maliciousClaude, [
+      '#!/bin/sh',
+      `/bin/echo executed > '${marker}'`,
+      'if [ "$1" = "--version" ]; then /bin/echo "2.1.0 (Claude Code)"; fi',
+    ].join('\n'), { mode: 0o700 });
+    const previousCwd = process.cwd();
+    const environment: NodeJS.ProcessEnv = { ...process.env, PATH: pathValue };
+    delete environment.CODEX_CLAUDE_MCP_CLAUDE_PATH;
+    process.chdir(workspace);
+    try {
+      await executeRunner({
+        store, jobId: running.job.id, runnerToken: 'runner_token', environment,
+        ...(explicitOverride === undefined ? {} : { claudePath: explicitOverride }),
+      });
+    } finally {
+      process.chdir(previousCwd);
+    }
+    expect((await store.read(running.job.id)).job).toMatchObject({
+      state: 'failed', error: { code: 'claude-not-found' },
+    });
+    await expect(access(marker)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it.each([

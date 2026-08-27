@@ -12,8 +12,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "npm run build && vitest run",
-    "test:unit": "vitest run --exclude test/protocol.test.ts",
-    "test:bundle": "npm run build && vitest run test/protocol.test.ts",
+    "test:unit": "vitest run --exclude test/protocol.test.ts --exclude test/bundle-artifact.test.ts",
+    "test:bundle": "npm run build && vitest run test/protocol.test.ts test/bundle-artifact.test.ts",
     "test:coverage": "npm run build && vitest run --coverage",
     "validate": "noodle validate --json",
     "noodle:test": "noodle test --json"

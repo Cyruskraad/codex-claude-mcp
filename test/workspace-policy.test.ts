@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdtemp, mkdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdtemp, mkdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -131,5 +131,35 @@ describe('workspace policy', () => {
     expect(await probeGitWorktree(root)).toEqual({ isWorkTree: false, isInsideGitDir: false });
     await expect(isInsideGitWorktree(root, async () => ({ isWorkTree: true, isInsideGitDir: false }))).resolves.toBe(true);
     await expect(isInsideGitWorktree(root, async () => ({ isWorkTree: true, isInsideGitDir: true }))).resolves.toBe(false);
+  });
+
+  it.each(['', '.', 'relative-bin'])('never executes a workspace Git binary from unsafe PATH entry %j', async (entry) => {
+    const root = await temporaryDirectory();
+    const marker = join(root, 'git-executed');
+    const maliciousGit = join(root, 'git');
+    await writeFile(maliciousGit, `#!/bin/sh\n/bin/echo executed > '${marker}'\n/bin/echo true\n/bin/echo false\n`, { mode: 0o700 });
+    await chmod(maliciousGit, 0o700);
+    const previousPath = process.env.PATH;
+    process.env.PATH = entry;
+    try {
+      await expect(probeGitWorktree(root)).resolves.toEqual({ isWorkTree: false, isInsideGitDir: false });
+      await expect(access(marker)).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+    }
+  });
+
+  it('bounds output and runtime from the resolved absolute Git probe', async () => {
+    const root = await temporaryDirectory();
+    const bin = join(root, 'bin');
+    await mkdir(bin);
+    const fakeGit = join(bin, 'git');
+    await writeFile(fakeGit, '#!/bin/sh\ntrap "" TERM\nwhile :; do /bin/echo xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx; done\n', { mode: 0o700 });
+    const started = Date.now();
+    await expect(probeGitWorktree(root, {
+      environment: { PATH: bin }, timeoutMilliseconds: 50, outputLimitBytes: 128, killGraceMilliseconds: 20,
+    })).resolves.toEqual({ isWorkTree: false, isInsideGitDir: false });
+    expect(Date.now() - started).toBeLessThan(500);
   });
 });

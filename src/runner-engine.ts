@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { buildClaudeInvocation } from './claude-invocation.js';
 import type { ClaudeError } from './contracts.js';
+import { resolveClaudeExecutable } from './executable-resolution.js';
 import { JobStore, JobStoreError } from './job-store.js';
 import { createClaudeStreamAccumulator, ingestClaudeStreamLine, snapshotClaudeStream, type ClaudeStreamAccumulator } from './stream-parser.js';
 
@@ -13,6 +14,7 @@ type CancelDeadline = () => void;
 
 export interface ExecuteRunnerOptions {
   store: JobStore; jobId: string; runnerToken: string; claudePath?: string; outputLimitBytes?: number; runnerPid?: number;
+  environment?: NodeJS.ProcessEnv;
   scheduleDeadline?: (callback: () => void, milliseconds: number) => CancelDeadline;
   waitForGrace?: () => Promise<void>;
   signalRunnerGroup?: (runnerPid: number, signal: Signal) => Promise<void>;
@@ -72,7 +74,16 @@ export async function executeRunner(options: ExecuteRunnerOptions): Promise<void
   const { store } = options;
   let record = await store.read(options.jobId);
   if (record.job.state !== 'running' || record.runner.token !== options.runnerToken) return;
-  const claudePath = options.claudePath ?? process.env.CODEX_CLAUDE_MCP_CLAUDE_PATH ?? 'claude';
+  const environment = options.environment ?? process.env;
+  const resolvedClaude = await resolveClaudeExecutable(
+    environment,
+    options.claudePath === undefined ? undefined : { provided: true, value: options.claudePath },
+  );
+  if (!resolvedClaude.found) {
+    await safelyPublishFailure(store, options.jobId, 'claude-not-found');
+    return;
+  }
+  const claudePath = resolvedClaude.path;
   const runnerPid = options.runnerPid ?? process.pid;
   const signalRunnerGroup = options.signalRunnerGroup ?? defaultSignalRunnerGroup;
   const waitForGrace = options.waitForGrace ?? defaultWaitForGrace;
@@ -146,7 +157,7 @@ export async function executeRunner(options: ExecuteRunnerOptions): Promise<void
   try {
     let version;
     phase = 'preflight';
-    try { version = await runChild(['--version'], { shell: false, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true }, true); }
+    try { version = await runChild(['--version'], { env: environment, shell: false, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true }, true); }
     catch { await safelyPublishFailure(store, options.jobId, 'claude-not-found'); return; }
     await stopping;
     if (intent || stopRequested) { await store.finalizeTerminalIntent(options.jobId); return; }
@@ -169,7 +180,7 @@ export async function executeRunner(options: ExecuteRunnerOptions): Promise<void
     let processResult: ProcessResult;
     try {
       phase = 'claude';
-      const running = runChild(invocation.args, { cwd: record.task.workspace, detached: false, shell: false, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+      const running = runChild(invocation.args, { cwd: record.task.workspace, detached: false, env: environment, shell: false, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
       if (!child?.pid) { await safelyPublishFailure(store, options.jobId, 'claude-failed'); return; }
       const active = child;
       const consume = (chunk: Buffer, stdout: boolean) => {

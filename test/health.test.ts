@@ -86,6 +86,28 @@ describe('Claude health probe', () => {
     expect(JSON.stringify(health)).not.toContain('private');
   });
 
+  it('rejects valid-looking version output when the version command exits nonzero', async () => {
+    const health = await probeClaudeHealth({
+      environment: completeEnvironment({ FAKE_VERSION_EXIT: '7' }),
+    });
+    expect(health).toMatchObject({
+      status: 'degraded',
+      cli: { found: true, version_status: 'malformed' },
+      authentication: { status: 'not_checked', ready: false },
+      issues: ['version_malformed'],
+    });
+    expect(health.cli).not.toHaveProperty('version');
+  });
+
+  it('rejects complete-looking help output when the help command exits nonzero', async () => {
+    const health = await probeClaudeHealth({
+      environment: completeEnvironment({ FAKE_HELP_EXIT: '7' }),
+    });
+    expect(health.status).toBe('degraded');
+    expect(health.features).toEqual(expect.objectContaining({ print: false, stream_json: false, explicit_resume: false }));
+    expect(health.issues).toContain('required_feature_missing');
+  });
+
   it.each([
     ['missing', '/definitely/missing/claude', 'not_found', 'cli_not_found'],
     ['relative', 'relative/claude', 'not_executable', 'cli_not_executable'],
