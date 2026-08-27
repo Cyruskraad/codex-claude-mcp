@@ -4,6 +4,7 @@ export default defineConfig({
   test: {
     include: ['test/**/*.test.ts'],
     coverage: {
+      all: true,
       exclude: ['src/noodle-authoring.ts'],
       include: ['src/**/*.ts'],
       provider: 'v8',
