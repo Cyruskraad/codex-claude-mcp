@@ -37,6 +37,30 @@ describe('Claude health probe', () => {
     });
   });
 
+  it('accepts the exact missing-input diagnostic emitted by Claude Code 2.1.247', async () => {
+    const health = await probeClaudeHealth({
+      environment: completeEnvironment({
+        FAKE_CLAUDE_HELP: helpWithoutMaxTurns,
+        FAKE_MAX_TURNS_PROBE_SCENARIO: 'recognized-prompt-argument',
+      }),
+    });
+
+    expect(health).toMatchObject({ status: 'ready', features: { max_turns: true }, issues: [] });
+  });
+
+  it('allows a bounded four-second default for a cold max-turns parser probe', async () => {
+    const started = Date.now();
+    const health = await probeClaudeHealth({
+      environment: completeEnvironment({
+        FAKE_CLAUDE_HELP: helpWithoutMaxTurns,
+        FAKE_MAX_TURNS_PROBE_SCENARIO: 'slow-recognized-prompt-argument',
+      }),
+    });
+
+    expect(health).toMatchObject({ status: 'ready', features: { max_turns: true }, issues: [] });
+    expect(Date.now() - started).toBeLessThan(4_500);
+  });
+
   it.each([
     ['an unknown option response', 'unknown'],
     ['an ambiguous failure', 'uncertain'],

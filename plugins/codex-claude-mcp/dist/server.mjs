@@ -18934,7 +18934,7 @@ function confirmsMaxTurns(probe) {
   }
   const unknownMaxTurns = /(?:unknown|unrecognized)\s+(?:option|argument)[^\n]{0,40}--max-turns|--max-turns[^\n]{0,40}(?:unknown|unrecognized)\s+(?:option|argument)/i;
   if (unknownMaxTurns.test(probe.output)) return false;
-  return /\binput\s+must\s+be\s+provided\s+either\s+through\s+stdin\s+or\s+as\s+a\s+positional\s+argument\s+when\s+using\s+--print\b/i.test(probe.output);
+  return /\binput\s+must\s+be\s+provided\s+either\s+through\s+stdin\s+or\s+as\s+a\s+(?:prompt|positional)\s+argument\s+when\s+using\s+--print\b/i.test(probe.output);
 }
 function authStatus(probe) {
   if (probe.timedOut || probe.outputLimited) return { status: "timeout", ready: false };
@@ -19000,7 +19000,7 @@ async function probeClaudeHealth(options = {}) {
         const maxTurnsProbe = await runProbe(
           discovery.path,
           ["-p", "--max-turns", "0"],
-          timeouts.maxTurns ?? 2e3,
+          timeouts.maxTurns ?? 4e3,
           4096,
           grace,
           environment

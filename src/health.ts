@@ -92,7 +92,7 @@ function confirmsMaxTurns(probe: ProbeResult): boolean {
   }
   const unknownMaxTurns = /(?:unknown|unrecognized)\s+(?:option|argument)[^\n]{0,40}--max-turns|--max-turns[^\n]{0,40}(?:unknown|unrecognized)\s+(?:option|argument)/i;
   if (unknownMaxTurns.test(probe.output)) return false;
-  return /\binput\s+must\s+be\s+provided\s+either\s+through\s+stdin\s+or\s+as\s+a\s+positional\s+argument\s+when\s+using\s+--print\b/i
+  return /\binput\s+must\s+be\s+provided\s+either\s+through\s+stdin\s+or\s+as\s+a\s+(?:prompt|positional)\s+argument\s+when\s+using\s+--print\b/i
     .test(probe.output);
 }
 
@@ -156,7 +156,7 @@ export async function probeClaudeHealth(options: ClaudeHealthOptions = {}): Prom
         const maxTurnsProbe = await runProbe(
           discovery.path,
           ['-p', '--max-turns', '0'],
-          timeouts.maxTurns ?? 2_000,
+          timeouts.maxTurns ?? 4_000,
           4_096,
           grace,
           environment,

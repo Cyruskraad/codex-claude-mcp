@@ -2,6 +2,7 @@
 /* global process, Buffer, setInterval, clearInterval */
 import { appendFile, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 
 const control = process.env.FAKE_CLAUDE_CONTROL_DIR;
 const scenario = process.env.FAKE_CLAUDE_SCENARIO ?? 'success';
@@ -48,6 +49,7 @@ if (process.argv.includes('--help')) {
 
 if (JSON.stringify(process.argv.slice(2)) === JSON.stringify(['-p', '--max-turns', '0'])) {
   const probeScenario = process.env.FAKE_MAX_TURNS_PROBE_SCENARIO ?? 'recognized';
+  if (probeScenario === 'slow-recognized-prompt-argument') await delay(2_250);
   if (probeScenario === 'hang') {
     process.on('SIGTERM', () => undefined);
     setInterval(() => undefined, 1_000);
@@ -75,6 +77,8 @@ if (JSON.stringify(process.argv.slice(2)) === JSON.stringify(['-p', '--max-turns
   }
   const outcomes = {
     recognized: [1, 'Error: Input must be provided either through stdin or as a positional argument when using --print.'],
+    'recognized-prompt-argument': [1, 'Error: Input must be provided either through stdin or as a prompt argument when using --print'],
+    'slow-recognized-prompt-argument': [1, 'Error: Input must be provided either through stdin or as a prompt argument when using --print'],
     unknown: [1, "error: unknown option '--max-turns'"],
     uncertain: [7, 'Unexpected parser failure.'],
     authentication: [1, 'Authentication required.'],

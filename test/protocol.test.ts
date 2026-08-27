@@ -268,7 +268,7 @@ describe('built MCP protocol', () => {
     }, {
       CODEX_CLAUDE_MCP_CLAUDE_PATH: fakeClaude,
       FAKE_CLAUDE_HELP: helpWithoutMaxTurns,
-      FAKE_MAX_TURNS_PROBE_SCENARIO: 'recognized',
+      FAKE_MAX_TURNS_PROBE_SCENARIO: 'recognized-prompt-argument',
       FAKE_MAX_TURNS_PROBE_OUTPUT: 'private parser diagnostic',
     });
   });
