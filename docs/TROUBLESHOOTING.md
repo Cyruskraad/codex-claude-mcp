@@ -35,9 +35,11 @@ Increase `timeout_seconds` up to 7,200 only when the task warrants it. Split bro
 
 An orphan means runner ownership could not be safely verified after interruption or restart. Inspect the bounded result/error, then start a new task or explicitly resume the captured Claude session if a session ID is available.
 
-## Cloud mode fails
+## Cloud session mode fails
 
-Cloud create/attach depends on installed CLI features and account entitlement. Health can verify CLI flag support, but it cannot promise a particular account has cloud Code access.
+Cloud attachment depends on installed CLI features and account entitlement. `claude_health.session_modes.cloud_attach` reports whether the CLI advertises the required `--cloud` flag, but it cannot promise that an account has cloud Code access. Create cloud sessions interactively in Claude Code and pass the explicit target to `cloud_attach`.
+
+`cloud_create` is intentionally unavailable through this noninteractive bridge because Claude Code 2.1.247 requires an interactive flow that conflicts with `-p` and stream-JSON. It returns `unsupported-session-mode` before validating the workspace, persisting the prompt, or launching Claude. The bridge never works around this with an argv prompt or pseudo-terminal.
 
 ## State permission error
 

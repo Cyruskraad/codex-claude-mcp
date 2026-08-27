@@ -40,10 +40,21 @@ describe('Claude invocation builder', () => {
 
   it.each([
     [{ mode: 'resume', session_id: 'sess_123' }, ['--resume', 'sess_123']],
-    [{ mode: 'cloud_create', description: 'Batch review' }, ['--cloud', '--name', 'Batch review']],
     [{ mode: 'cloud_attach', target: 'cloud_123' }, ['--cloud', 'cloud_123']],
   ] as const)('maps explicit session mode %o to current CLI arguments', (session, expected) => {
     const args = buildClaudeInvocation(input({ session })).args;
     expect(args.slice(-expected.length)).toEqual(expected);
+  });
+
+  it('fails closed if cloud creation reaches the invocation builder', () => {
+    expect(() => buildClaudeInvocation(input({
+      session: { mode: 'cloud_create', description: 'private description' },
+    }))).toThrowError('Cloud session creation is unavailable through this noninteractive bridge; create it in Claude Code and use cloud_attach.');
+    try {
+      buildClaudeInvocation(input({ session: { mode: 'cloud_create', description: 'private description' } }));
+    } catch (error) {
+      expect(error).toMatchObject({ code: 'unsupported-session-mode' });
+      expect(String((error as Error).message)).not.toContain('private description');
+    }
   });
 });

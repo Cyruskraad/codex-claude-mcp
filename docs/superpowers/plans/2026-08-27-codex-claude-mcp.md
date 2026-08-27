@@ -45,7 +45,7 @@
 
 **Produces:** atomic private state, concurrency/retention/output enforcement, detached execution, cancellation, orphan recovery, and fake-Claude integration coverage.
 
-- [ ] Write failing tests using a fake Claude executable for success, malformed JSON, auth failure, unsupported versions, crashes, hangs, resume/cloud arguments, prompt secrecy, timeout, cancellation, output limit, cleanup, concurrency, orphan recovery, and auto promotion.
+- [ ] Write failing tests using a fake Claude executable for success, malformed JSON, auth failure, unsupported versions, crashes, hangs, resume/cloud-attach arguments, rejected noninteractive cloud creation, prompt secrecy, timeout, cancellation, output limit, cleanup, concurrency, orphan recovery, and auto promotion.
 - [ ] Run focused tests and verify expected RED failures.
 - [ ] Implement state storage, queue/supervisor services, detached runner, process-group cancellation, atomic updates, cleanup, and paginated output.
 - [ ] Run focused and full tests, refactor while green, and commit the task.
@@ -74,7 +74,7 @@
 **Produces:** release-quality verification evidence, installed-plugin smoke test, public GitHub repository, and v0.1.0 release artifacts.
 
 - [ ] Run the complete clean verification matrix, enforce coverage, audit dependencies/secrets, generate the release ZIP, checksum, and SBOM, and verify archive contents.
-- [ ] After user Claude authentication, run health plus disposable-repo inspect, write, resume, async, and supported cloud Code-mode smoke tests.
+- [ ] After user Claude authentication, run health plus disposable-repo inspect, write, resume, async, and supported cloud-attach smoke tests using a session created interactively in Claude Code.
 - [ ] Install the repo marketplace/plugin in Codex, test tool discovery and one end-to-end call in a new task, and visually verify the icon.
 - [ ] Re-run Claude Advisor for adversarial review and resolve blocker/major findings.
 - [ ] Restore exact version `0.1.0`, validate a clean Git state, and commit.

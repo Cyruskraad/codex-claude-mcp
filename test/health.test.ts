@@ -16,8 +16,24 @@ const helpWithoutMaxTurns = [
   '--no-chrome', '--tools', '--permission-mode', '--model', '--effort', '--resume', '--cloud',
   '--name', '--mcp-config', '--strict-mcp-config', '--disallowedTools',
 ].join('\n');
+const helpWithoutCloudName = [
+  '-p, --print', '--input-format stream-json', '--output-format stream-json', '--verbose',
+  '--max-turns', '--no-chrome', '--tools', '--permission-mode', '--model', '--effort', '--resume',
+  '--cloud', '--mcp-config', '--strict-mcp-config', '--disallowedTools',
+].join('\n');
 
 describe('Claude health probe', () => {
+  it('reports supported noninteractive session modes without treating cloud creation as readiness', async () => {
+    const health = await probeClaudeHealth({
+      environment: completeEnvironment({ FAKE_CLAUDE_HELP: helpWithoutCloudName }),
+    });
+
+    expect(health).toMatchObject({
+      status: 'ready', features: { cloud_sessions: true }, issues: [],
+      session_modes: { new: true, resume: true, cloud_attach: true, cloud_create: false },
+    });
+  });
+
   it('confirms max-turns with a prompt-free parser probe when current help omits it', async () => {
     const root = await realpath(await mkdtemp(join(tmpdir(), 'codex-claude-health-max-turns-')));
     const record = join(root, 'probe.json');

@@ -4111,6 +4111,7 @@ var ClaudeErrorCodeSchema = external_exports.enum([
   "invalid-workspace",
   "forbidden-workspace",
   "write-requires-git",
+  "unsupported-session-mode",
   "claude-not-found",
   "claude-unsupported",
   "auth-required",
@@ -4125,6 +4126,7 @@ var ClaudeErrorCodeSchema = external_exports.enum([
   "orphaned",
   "internal-error"
 ]);
+var CLOUD_CREATE_UNSUPPORTED_MESSAGE = "Cloud session creation is unavailable through this noninteractive bridge; create it in Claude Code and use cloud_attach.";
 var ClaudeTerminalErrorSubtypeSchema = external_exports.enum([
   "error_during_execution",
   "error_max_turns",
@@ -4217,6 +4219,14 @@ var ClaudeJobSchema = external_exports.object({
     context.addIssue({ code: external_exports.ZodIssueCode.custom, message: "Terminal state requires its stable error code." });
   }
 });
+var ClaudeContractError = class extends Error {
+  code;
+  constructor(code, message) {
+    super(message);
+    this.name = "ClaudeContractError";
+    this.code = code;
+  }
+};
 
 // src/process-identity.ts
 import { spawn } from "child_process";
@@ -4935,9 +4945,7 @@ function buildClaudeInvocation(input) {
       args.push("--resume", input.session.session_id);
       break;
     case "cloud_create":
-      args.push("--cloud");
-      if (input.session.description) args.push("--name", input.session.description);
-      break;
+      throw new ClaudeContractError("unsupported-session-mode", CLOUD_CREATE_UNSUPPORTED_MESSAGE);
     case "cloud_attach":
       args.push("--cloud", input.session.target);
       break;
@@ -5140,6 +5148,7 @@ function normalizedError(code) {
     "invalid-workspace": "Workspace is invalid.",
     "forbidden-workspace": "Workspace is not allowed.",
     "write-requires-git": "Write access requires a Git worktree.",
+    "unsupported-session-mode": CLOUD_CREATE_UNSUPPORTED_MESSAGE,
     "claude-not-found": "Claude Code executable was not found.",
     "claude-unsupported": "Claude Code version is unsupported.",
     "auth-required": "Claude Code authentication is required.",

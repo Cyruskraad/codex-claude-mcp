@@ -50,11 +50,13 @@ export type JobState = z.infer<typeof JobStateSchema>;
 
 export const ClaudeErrorCodeSchema = z.enum([
   'invalid-input', 'invalid-workspace', 'forbidden-workspace', 'write-requires-git',
+  'unsupported-session-mode',
   'claude-not-found', 'claude-unsupported', 'auth-required', 'concurrency-limit',
   'job-not-found', 'job-not-terminal', 'malformed-stream', 'claude-failed', 'cancelled',
   'timed-out', 'output-limited', 'orphaned', 'internal-error',
 ]);
 export type ClaudeErrorCode = z.infer<typeof ClaudeErrorCodeSchema>;
+export const CLOUD_CREATE_UNSUPPORTED_MESSAGE = 'Cloud session creation is unavailable through this noninteractive bridge; create it in Claude Code and use cloud_attach.' as const;
 export const ClaudeTerminalErrorSubtypeSchema = z.enum([
   'error_during_execution', 'error_max_turns', 'error_max_budget_usd',
   'error_max_structured_output_retries', 'error_invalid_request', 'error_api',

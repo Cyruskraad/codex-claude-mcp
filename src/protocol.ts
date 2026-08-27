@@ -62,6 +62,9 @@ export const ClaudeHealthSchema = z.object({
     effort: z.boolean(), explicit_resume: z.boolean(), cloud_sessions: z.boolean(), mcp_config: z.boolean(),
     strict_mcp_config: z.boolean(), disable_nested_mcp: z.boolean(),
   }).strict(STRICT_MESSAGE),
+  session_modes: z.object({
+    new: z.literal(true), resume: z.literal(true), cloud_attach: z.boolean(), cloud_create: z.literal(false),
+  }).strict(STRICT_MESSAGE),
   authentication: z.object({
     status: z.enum(['ready', 'not_ready', 'expired', 'unknown', 'timeout', 'not_checked']),
     ready: z.boolean(),
@@ -110,6 +113,7 @@ function success(value: Record<string, unknown>): CallToolResult {
 const stableMessages: Record<ClaudeError['code'], string> = {
   'invalid-input': 'Invalid Claude bridge input.', 'invalid-workspace': 'Workspace is invalid.',
   'forbidden-workspace': 'Workspace is not allowed.', 'write-requires-git': 'Write access requires a Git worktree.',
+  'unsupported-session-mode': 'Cloud session creation is unavailable through this noninteractive bridge; create it in Claude Code and use cloud_attach.',
   'claude-not-found': 'Claude Code executable was not found.', 'claude-unsupported': 'Claude Code version is unsupported.',
   'auth-required': 'Claude Code authentication is required.', 'concurrency-limit': 'Claude job capacity is unavailable.',
   'job-not-found': 'Claude job was not found.', 'job-not-terminal': 'Claude job is not terminal.',
@@ -160,7 +164,7 @@ export function createClaudeMcpServer(dependencies: ClaudeMcpServerDependencies)
 
   server.registerTool('claude_task', {
     title: 'Start Claude Code Task',
-    description: 'Start new, explicitly resumed, or cloud Claude Code work in a validated local workspace.',
+    description: 'Start new local, explicitly resumed, or cloud-attached Claude Code work in a validated local workspace.',
     inputSchema: ClaudeTaskInputSchema, outputSchema: JobStatusViewSchema, annotations: taskAnnotations,
   }, guarded(async (input) => dependencies.jobs.submitTask(input) as unknown as Record<string, unknown>));
 

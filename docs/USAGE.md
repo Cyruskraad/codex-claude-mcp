@@ -28,11 +28,10 @@ Model can be a bridge alias (`sonnet`, `opus`, `haiku`, or `fable`) or a full Cl
 ```json
 { "mode": "new" }
 { "mode": "resume", "session_id": "explicit-session-id" }
-{ "mode": "cloud_create", "description": "Review auth refactor" }
 { "mode": "cloud_attach", "target": "explicit-cloud-target" }
 ```
 
-The bridge never resumes a “most recent” session. Cloud modes work only when the installed Claude Code version and account support them.
+The bridge never resumes a “most recent” session. `cloud_attach` works only when the installed Claude Code version and account support it. Create the cloud session interactively in Claude Code, then supply its explicit target. The `cloud_create` input variant remains in the schema for forward compatibility but currently returns `unsupported-session-mode` before workspace validation or job creation because Claude Code 2.1.247 cloud creation is interactive-only and incompatible with this noninteractive stream-JSON bridge.
 
 ## Asynchronous jobs
 

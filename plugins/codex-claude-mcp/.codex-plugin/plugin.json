@@ -15,10 +15,10 @@
   "interface": {
     "displayName": "Claude Code Bridge",
     "shortDescription": "Delegate permission-aware local tasks to Claude Code.",
-    "longDescription": "Run inspected or explicitly authorized write tasks through the local Claude Code CLI with model, effort, session, and durable job controls.",
+    "longDescription": "Run inspected or explicitly authorized write tasks through the local Claude Code CLI with model, effort, explicit local/resumed/cloud-attach sessions, and durable job controls.",
     "developerName": "Cyruskraad",
     "category": "Developer Tools",
-    "capabilities": ["Local MCP", "Code inspection", "Permission-aware writes", "Asynchronous jobs"],
+    "capabilities": ["Local MCP", "Code inspection", "Permission-aware writes", "Cloud session attach", "Asynchronous jobs"],
     "websiteURL": "https://github.com/Cyruskraad/codex-claude-mcp",
     "privacyPolicyURL": "https://github.com/Cyruskraad/codex-claude-mcp/blob/main/docs/PRIVACY.md",
     "defaultPrompt": [

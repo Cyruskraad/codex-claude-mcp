@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { buildClaudeInvocation } from './claude-invocation.js';
-import type { ClaudeError } from './contracts.js';
+import { CLOUD_CREATE_UNSUPPORTED_MESSAGE, type ClaudeError } from './contracts.js';
 import { resolveClaudeExecutable } from './executable-resolution.js';
 import { JobStore, JobStoreError } from './job-store.js';
 import { createClaudeStreamAccumulator, ingestClaudeStreamLine, snapshotClaudeStream, type ClaudeStreamAccumulator } from './stream-parser.js';
@@ -28,6 +28,7 @@ function normalizedError(code: ClaudeError['code']): ClaudeError {
   const messages: Record<ClaudeError['code'], string> = {
     'invalid-input': 'Invalid Claude task input.', 'invalid-workspace': 'Workspace is invalid.',
     'forbidden-workspace': 'Workspace is not allowed.', 'write-requires-git': 'Write access requires a Git worktree.',
+    'unsupported-session-mode': CLOUD_CREATE_UNSUPPORTED_MESSAGE,
     'claude-not-found': 'Claude Code executable was not found.', 'claude-unsupported': 'Claude Code version is unsupported.',
     'auth-required': 'Claude Code authentication is required.', 'concurrency-limit': 'Claude concurrency limit was reached.',
     'job-not-found': 'Claude job was not found.', 'job-not-terminal': 'Claude job is not terminal.',

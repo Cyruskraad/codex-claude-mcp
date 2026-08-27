@@ -79,7 +79,7 @@ function parseFeatures(help: string): FeatureSet {
     model: includesFlag(help, '--model'),
     effort: includesFlag(help, '--effort'),
     explicit_resume: includesFlag(help, '--resume'),
-    cloud_sessions: includesFlag(help, '--cloud') && includesFlag(help, '--name'),
+    cloud_sessions: includesFlag(help, '--cloud'),
     mcp_config: includesFlag(help, '--mcp-config'),
     strict_mcp_config: includesFlag(help, '--strict-mcp-config'),
     disable_nested_mcp: includesFlag(help, '--disallowedTools'),
@@ -115,6 +115,7 @@ export async function probeClaudeHealth(options: ClaudeHealthOptions = {}): Prom
     checked_at: now().toISOString(), minimum_cli_version: MINIMUM_VERSION_TEXT,
     model_aliases: [...MODEL_ALIASES] as ClaudeHealth['model_aliases'],
     supported_effort_levels: [...EFFORT_LEVELS] as ClaudeHealth['supported_effort_levels'],
+    session_modes: { new: true, resume: true, cloud_attach: false, cloud_create: false } as const,
     bridge: { running_jobs: counts.runningJobs, queued_jobs: counts.queuedJobs, concurrency_limit: 2 as const },
   };
   const discovery = await resolveClaudeExecutable(environment);
@@ -184,6 +185,8 @@ export async function probeClaudeHealth(options: ClaudeHealthOptions = {}): Prom
       found: true, path: displayPath(discovery.path, canonicalHome),
       resolution: discovery.resolution, ...(version ? { version } : {}), version_status: versionStatus,
     },
-    features, authentication, issues: uniqueIssues,
+    features,
+    session_modes: { ...base.session_modes, cloud_attach: features.cloud_sessions },
+    authentication, issues: uniqueIssues,
   };
 }

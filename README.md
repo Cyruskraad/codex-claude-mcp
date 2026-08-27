@@ -1,6 +1,6 @@
 # Claude Code Bridge
 
-Claude Code Bridge is a local, permission-aware MCP server and Codex plugin that lets Codex delegate coding and repository work to an installed Claude Code CLI. It supports explicit model and effort selection, inspect/write access, resumable sessions, cloud Code sessions when the account supports them, and durable synchronous or asynchronous jobs.
+Claude Code Bridge is a local, permission-aware MCP server and Codex plugin that lets Codex delegate coding and repository work to an installed Claude Code CLI. It supports explicit model and effort selection, inspect/write access, resumable sessions, attachment to existing cloud Code sessions when the account supports them, and durable synchronous or asynchronous jobs.
 
 The bridge itself runs entirely on your computer. It does not host an MCP service, send data to Noodle Cloud, automate the Claude.ai website, or provide access to ordinary Claude.ai chats. Claude Code still communicates with Anthropic or your configured provider: prompts, repository content Claude reads, tool interactions, session metadata, and generated output may leave your computer under that provider's terms and account settings.
 
@@ -12,7 +12,7 @@ The bridge itself runs entirely on your computer. It does not host an MCP servic
 - Seven focused MCP tools for health, task launch, status, paginated results, continuation, cancellation, and forgetting bridge data.
 - `inspect` access by default with `Read,Glob,Grep` and plan permissions; `write` uses Claude Code's `acceptEdits` permission mode and never bypasses its permission system.
 - Explicit model aliases or full Claude model IDs and effort levels from `low` through `max`.
-- New, explicitly resumed, cloud-created, and cloud-attached sessions—never an unsafe “continue most recent” operation.
+- New local, explicitly resumed, and explicitly cloud-attached sessions—never an unsafe “continue most recent” operation. Create cloud sessions interactively in Claude Code before attaching them.
 - Private local state, two-job concurrency, 32 MiB raw-output limits, timeouts, cancellation, orphan recovery, and seven-day terminal-job retention.
 - Self-contained Node.js bundles for macOS, Linux, and WSL2.
 

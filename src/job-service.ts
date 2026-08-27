@@ -6,7 +6,7 @@ import { platform } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import {
-  ClaudeContractError, type ClaudeJob, type ClaudeTaskInput, parseClaudeTaskInput,
+  CLOUD_CREATE_UNSUPPORTED_MESSAGE, ClaudeContractError, type ClaudeJob, type ClaudeTaskInput, parseClaudeTaskInput,
 } from './contracts.js';
 import {
   JobStore, JobStoreError, RETENTION_MILLISECONDS, type Clock, type InternalJobRecord,
@@ -186,6 +186,9 @@ export class JobService {
 
   async submitTask(input: ClaudeTaskInput): Promise<JobStatusView> {
     const parsed = parseClaudeTaskInput(input);
+    if (parsed.session.mode === 'cloud_create') {
+      throw new ClaudeContractError('unsupported-session-mode', CLOUD_CREATE_UNSUPPORTED_MESSAGE);
+    }
     const workspace = await this.workspaceValidator(parsed.workspace, { access: parsed.access });
     const task = { ...parsed, workspace: workspace.canonicalPath };
     const previousAcceptance = this.acceptance;

@@ -150,7 +150,6 @@ describe('detached Claude runner integration', () => {
   });
 
   it.each([
-    [{ mode: 'cloud_create', description: 'Safe name' }, ['--cloud', '--name', 'Safe name']],
     [{ mode: 'cloud_attach', target: 'cloud_target' }, ['--cloud', 'cloud_target']],
   ] as const)('passes exact cloud args for %o while keeping prompt off argv', async (session, expected) => {
     const { control, store, running } = await setup('success', { session });

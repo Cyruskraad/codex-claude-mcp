@@ -2,7 +2,7 @@
 
 ## Goal
 
-Create an independent, local-only Codex plugin that exposes a typed stdio MCP bridge to the installed Claude Code CLI. The bridge supports selectable Claude model and effort, inspected or write-capable tasks, explicit local/cloud sessions, and durable hybrid jobs without automating ordinary Claude.ai chats.
+Create an independent, local-only Codex plugin that exposes a typed stdio MCP bridge to the installed Claude Code CLI. The bridge supports selectable Claude model and effort, inspected or write-capable tasks, explicit local/resumed sessions, attachment to existing cloud sessions, and durable hybrid jobs without automating ordinary Claude.ai chats.
 
 ## Architecture
 
@@ -21,7 +21,7 @@ Create an independent, local-only Codex plugin that exposes a typed stdio MCP br
 - `claude_job_cancel`
 - `claude_job_forget`
 
-`claude_task` requires an absolute workspace and prompt. It accepts `access: inspect|write`, optional model and effort (`low|medium|high|xhigh|max`), `max_turns` from 1 to 100, explicit new/resume/cloud session settings, and `auto|sync|async` execution with bounded wait and runtime timeouts. Inspect mode limits Claude to `Read,Glob,Grep` with plan permissions. Write mode selects Claude Code's `acceptEdits` permission mode for authorized edits in a validated Git workspace; other commands and protected paths remain under Claude Code's ordinary permission rules. Both isolate nested MCP and disable Chrome.
+`claude_task` requires an absolute workspace and prompt. It accepts `access: inspect|write`, optional model and effort (`low|medium|high|xhigh|max`), `max_turns` from 1 to 100, explicit new/resume/cloud-attach session settings, and `auto|sync|async` execution with bounded wait and runtime timeouts. The `cloud_create` schema variant is retained for forward compatibility but fails synchronously before workspace validation or persistence while Claude Code creation remains interactive-only. Inspect mode limits Claude to `Read,Glob,Grep` with plan permissions. Write mode selects Claude Code's `acceptEdits` permission mode for authorized edits in a validated Git workspace; other commands and protected paths remain under Claude Code's ordinary permission rules. Both isolate nested MCP and disable Chrome.
 
 ## Security and Privacy
 

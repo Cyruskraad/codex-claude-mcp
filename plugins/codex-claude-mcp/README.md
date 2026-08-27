@@ -6,6 +6,8 @@ It requires Node.js 20.19+ and an installed, authenticated Claude Code CLI 2.1.0
 
 The bridge is local-only and does not provide ordinary Claude.ai chat access. Forgetting a bridge job does not delete Claude Code's transcript. Full installation, privacy, permission, and troubleshooting documentation is available in the [public repository](https://github.com/Cyruskraad/codex-claude-mcp).
 
+The plugin can attach to an explicit existing cloud Code session when supported. Create cloud sessions interactively in Claude Code first; noninteractive `cloud_create` returns a stable unsupported-mode error without persisting the request.
+
 This is an independent, unofficial project and is not affiliated with OpenAI or Anthropic.
 
 Licensed under the [MIT License](LICENSE).

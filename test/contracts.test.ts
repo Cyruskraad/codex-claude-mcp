@@ -108,6 +108,7 @@ describe('Claude task contracts', () => {
     })).toMatchObject({ id: 'job_1', state: 'succeeded' });
     expect(ClaudeErrorCodeSchema.options).toEqual([
       'invalid-input', 'invalid-workspace', 'forbidden-workspace', 'write-requires-git',
+      'unsupported-session-mode',
       'claude-not-found', 'claude-unsupported', 'auth-required', 'concurrency-limit',
       'job-not-found', 'job-not-terminal', 'malformed-stream', 'claude-failed', 'cancelled',
       'timed-out', 'output-limited', 'orphaned', 'internal-error',

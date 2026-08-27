@@ -1,4 +1,6 @@
-import type { NormalizedClaudeTaskInput } from './contracts.js';
+import {
+  CLOUD_CREATE_UNSUPPORTED_MESSAGE, ClaudeContractError, type NormalizedClaudeTaskInput,
+} from './contracts.js';
 
 export interface ClaudeInvocation {
   args: string[];
@@ -34,9 +36,7 @@ export function buildClaudeInvocation(input: NormalizedClaudeTaskInput): ClaudeI
       args.push('--resume', input.session.session_id);
       break;
     case 'cloud_create':
-      args.push('--cloud');
-      if (input.session.description) args.push('--name', input.session.description);
-      break;
+      throw new ClaudeContractError('unsupported-session-mode', CLOUD_CREATE_UNSUPPORTED_MESSAGE);
     case 'cloud_attach':
       args.push('--cloud', input.session.target);
       break;

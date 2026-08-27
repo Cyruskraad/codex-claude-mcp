@@ -17437,6 +17437,7 @@ var ClaudeErrorCodeSchema = external_exports.enum([
   "invalid-workspace",
   "forbidden-workspace",
   "write-requires-git",
+  "unsupported-session-mode",
   "claude-not-found",
   "claude-unsupported",
   "auth-required",
@@ -17451,6 +17452,7 @@ var ClaudeErrorCodeSchema = external_exports.enum([
   "orphaned",
   "internal-error"
 ]);
+var CLOUD_CREATE_UNSUPPORTED_MESSAGE = "Cloud session creation is unavailable through this noninteractive bridge; create it in Claude Code and use cloud_attach.";
 var ClaudeTerminalErrorSubtypeSchema = external_exports.enum([
   "error_during_execution",
   "error_max_turns",
@@ -18636,6 +18638,9 @@ var JobService = class {
   }
   async submitTask(input) {
     const parsed = parseClaudeTaskInput(input);
+    if (parsed.session.mode === "cloud_create") {
+      throw new ClaudeContractError("unsupported-session-mode", CLOUD_CREATE_UNSUPPORTED_MESSAGE);
+    }
     const workspace = await this.workspaceValidator(parsed.workspace, { access: parsed.access });
     const task = { ...parsed, workspace: workspace.canonicalPath };
     const previousAcceptance = this.acceptance;
@@ -18922,7 +18927,7 @@ function parseFeatures(help) {
     model: includesFlag(help, "--model"),
     effort: includesFlag(help, "--effort"),
     explicit_resume: includesFlag(help, "--resume"),
-    cloud_sessions: includesFlag(help, "--cloud") && includesFlag(help, "--name"),
+    cloud_sessions: includesFlag(help, "--cloud"),
     mcp_config: includesFlag(help, "--mcp-config"),
     strict_mcp_config: includesFlag(help, "--strict-mcp-config"),
     disable_nested_mcp: includesFlag(help, "--disallowedTools")
@@ -18955,6 +18960,7 @@ async function probeClaudeHealth(options = {}) {
     minimum_cli_version: MINIMUM_VERSION_TEXT,
     model_aliases: [...MODEL_ALIASES],
     supported_effort_levels: [...EFFORT_LEVELS],
+    session_modes: { new: true, resume: true, cloud_attach: false, cloud_create: false },
     bridge: { running_jobs: counts.runningJobs, queued_jobs: counts.queuedJobs, concurrency_limit: 2 }
   };
   const discovery = await resolveClaudeExecutable(environment);
@@ -19035,6 +19041,7 @@ async function probeClaudeHealth(options = {}) {
       version_status: versionStatus
     },
     features,
+    session_modes: { ...base.session_modes, cloud_attach: features.cloud_sessions },
     authentication,
     issues: uniqueIssues
   };
@@ -23175,6 +23182,12 @@ var ClaudeHealthSchema = external_exports.object({
     strict_mcp_config: external_exports.boolean(),
     disable_nested_mcp: external_exports.boolean()
   }).strict(STRICT_MESSAGE2),
+  session_modes: external_exports.object({
+    new: external_exports.literal(true),
+    resume: external_exports.literal(true),
+    cloud_attach: external_exports.boolean(),
+    cloud_create: external_exports.literal(false)
+  }).strict(STRICT_MESSAGE2),
   authentication: external_exports.object({
     status: external_exports.enum(["ready", "not_ready", "expired", "unknown", "timeout", "not_checked"]),
     ready: external_exports.boolean()
@@ -23220,6 +23233,7 @@ var stableMessages = {
   "invalid-workspace": "Workspace is invalid.",
   "forbidden-workspace": "Workspace is not allowed.",
   "write-requires-git": "Write access requires a Git worktree.",
+  "unsupported-session-mode": "Cloud session creation is unavailable through this noninteractive bridge; create it in Claude Code and use cloud_attach.",
   "claude-not-found": "Claude Code executable was not found.",
   "claude-unsupported": "Claude Code version is unsupported.",
   "auth-required": "Claude Code authentication is required.",
@@ -23273,7 +23287,7 @@ function createClaudeMcpServer(dependencies) {
   }, guarded(async () => dependencies.health()));
   server.registerTool("claude_task", {
     title: "Start Claude Code Task",
-    description: "Start new, explicitly resumed, or cloud Claude Code work in a validated local workspace.",
+    description: "Start new local, explicitly resumed, or cloud-attached Claude Code work in a validated local workspace.",
     inputSchema: ClaudeTaskInputSchema,
     outputSchema: JobStatusViewSchema,
     annotations: taskAnnotations

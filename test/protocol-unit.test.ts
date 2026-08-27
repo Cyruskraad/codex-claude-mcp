@@ -21,6 +21,7 @@ const health: ClaudeHealth = {
     inspect_tools: true, plan_permission: true, model: true, effort: true, explicit_resume: true,
     cloud_sessions: true, mcp_config: true, strict_mcp_config: true, disable_nested_mcp: true,
   },
+  session_modes: { new: true, resume: true, cloud_attach: true, cloud_create: false },
   authentication: { status: 'ready', ready: true },
   model_aliases: ['sonnet', 'opus', 'haiku', 'fable'],
   supported_effort_levels: ['low', 'medium', 'high', 'xhigh', 'max'],

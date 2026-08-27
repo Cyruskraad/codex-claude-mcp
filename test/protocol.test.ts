@@ -1,5 +1,5 @@
 import { execFile, spawn } from 'node:child_process';
-import { access, mkdir, mkdtemp, readFile, realpath, stat, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, readdir, realpath, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
@@ -214,9 +214,12 @@ describe('built MCP protocol', () => {
       expect((resultTool.outputSchema as unknown as ProtocolSchema).properties.next_cursor).toMatchObject({ minLength: 1, maxLength: 4096 });
 
       const healthOutput = tools[0].outputSchema as unknown as ProtocolSchema;
-      for (const nested of ['cli', 'features', 'authentication', 'bridge']) {
+      for (const nested of ['cli', 'features', 'session_modes', 'authentication', 'bridge']) {
         expect(healthOutput.properties[nested].additionalProperties).toBe(false);
       }
+      expect(healthOutput.properties.session_modes.properties).toMatchObject({
+        new: { const: true }, resume: { const: true }, cloud_attach: { type: 'boolean' }, cloud_create: { const: false },
+      });
       expect(healthOutput.properties.status.enum).toEqual(['ready', 'degraded', 'unavailable']);
       expect(healthOutput.properties.cli.properties.version_status.enum).toEqual([
         'supported', 'too_old', 'malformed', 'timeout', 'not_found', 'not_executable',
@@ -250,6 +253,9 @@ describe('built MCP protocol', () => {
         print: true, stream_json: true, verbose: true, max_turns: true, no_chrome: true,
         inspect_tools: true, plan_permission: true, model: true, effort: true, explicit_resume: true,
         cloud_sessions: true, mcp_config: true, strict_mcp_config: true, disable_nested_mcp: true,
+      });
+      expect(result.structuredContent).toMatchObject({
+        session_modes: { new: true, resume: true, cloud_attach: true, cloud_create: false },
       });
       expect(JSON.parse(((result.content as Array<{ text: string }>)[0]).text)).toEqual(result.structuredContent);
       const serialized = JSON.stringify(result);
@@ -317,7 +323,6 @@ describe('built MCP protocol', () => {
 
   it.each([
     [{ mode: 'resume', session_id: 'sess_explicit' }, ['--resume', 'sess_explicit']],
-    [{ mode: 'cloud_create', description: 'Cloud description' }, ['--cloud', '--name', 'Cloud description']],
     [{ mode: 'cloud_attach', target: 'cloud_target' }, ['--cloud', 'cloud_target']],
   ] as const)('runs built session form %o with exact arguments', async (session, expectedArguments) => {
     const root = await realpath(await mkdtemp(join(tmpdir(), 'codex-claude-protocol-session-')));
@@ -341,6 +346,39 @@ describe('built MCP protocol', () => {
       FAKE_CLAUDE_CONTROL_DIR: control,
       FAKE_CLAUDE_SCENARIO: 'success',
     });
+  });
+
+  it('rejects cloud creation safely before workspace validation, persistence, or spawn', async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'codex-claude-protocol-cloud-create-')));
+    const control = join(root, 'control');
+    const stateRoot = join(root, 'state');
+    await mkdir(control);
+    const privatePrompt = 'private cloud create prompt';
+    const privateDescription = 'private cloud create description';
+    await withProtocolClient(async (client) => {
+      const result = await client.callTool({
+        name: 'claude_task',
+        arguments: {
+          workspace: join(root, 'private-nonexistent-workspace'), prompt: privatePrompt,
+          session: { mode: 'cloud_create', description: privateDescription }, execution: { mode: 'async' },
+        },
+      });
+      expect(result.isError).toBe(true);
+      expect(result).not.toHaveProperty('structuredContent');
+      expect(JSON.parse(((result.content as Array<{ text: string }>)[0]).text)).toEqual({
+        error: {
+          code: 'unsupported-session-mode',
+          message: 'Cloud session creation is unavailable through this noninteractive bridge; create it in Claude Code and use cloud_attach.',
+        },
+      });
+      expect(JSON.stringify(result)).not.toMatch(/private cloud create|private-nonexistent/i);
+      expect(await readdir(join(stateRoot, 'jobs'))).toEqual([]);
+      await expect(readFile(join(control, 'argv.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    }, {
+      CODEX_CLAUDE_MCP_CLAUDE_PATH: fakeClaude,
+      FAKE_CLAUDE_CONTROL_DIR: control,
+      FAKE_CLAUDE_SCENARIO: 'success',
+    }, stateRoot);
   });
 
   it.each([

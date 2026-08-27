@@ -5,11 +5,11 @@ description: Use when delegating repository inspection, coding, or other local w
 
 # Claude Code Bridge
 
-Use the bridge as a permission-aware local Claude Code process wrapper. Begin a bridge workflow with `claude_health` input `{}`; proceed only when the CLI, required features, and authentication are ready.
+Use this permission-aware local wrapper. Call `claude_health({})` first; proceed only when CLI features and authentication are ready.
 
 ## Start work
 
-`claude_task` is the only tool that selects workspace, access, model, effort, turn limit, or session:
+`claude_task` selects workspace, access, model, effort, turns, and session:
 
 ```ts
 {
@@ -35,9 +35,10 @@ Use the bridge as a permission-aware local Claude Code process wrapper. Begin a 
 - Default to `inspect`. Use `write` only for an explicitly authorized change in an absolute, existing, real Git worktree. It selects Claude `acceptEdits`, auto-approving file edits and Claude-classified common filesystem commands in the validated workspace; other commands and protected paths retain Claude permission checks. This is not OS confinement. Commits, pushes, network, and other external effects require separate target-scoped authorization; never infer a remote, branch, or account.
 - Match model/effort to task difficulty; leave them unset for Claude defaults.
 - Use explicit session IDs/cloud targets; never infer “the most recent.”
+- `cloud_create` is schema-only and returns `unsupported-session-mode`; create interactively in Claude Code, then use explicit `cloud_attach`.
 - Inspect uses bounded read/search and plan permissions. Chrome/nested MCP remain disabled; never request bypasses.
 
-If a user authorizes edits after an inspect-only job, start a new `claude_task` with `access: "write"`. To retain context, pass the captured `claude_session_id` as `session: { mode: "resume", session_id }`.
+After inspect, authorized edits require a new write task; resume with the captured `claude_session_id`.
 
 ## Manage jobs
 

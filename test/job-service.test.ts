@@ -26,6 +26,37 @@ async function setup(launcher?: RunnerLauncher, now = new Date('2026-08-27T12:00
 }
 
 describe('durable job lifecycle service', () => {
+  it('rejects cloud creation before workspace validation, persistence, scheduling, or spawn', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'codex-claude-cloud-create-reject-'));
+    const stateRoot = join(root, 'state-must-not-exist');
+    let validations = 0;
+    let launches = 0;
+    const service = new JobService({
+      stateRoot,
+      workspaceValidator: async (path) => { validations += 1; return { canonicalPath: path }; },
+      launcher: { launch: async () => { launches += 1; return { pid: 99, birthIdentity: 'never' }; } },
+      processIdentityInspector: testProcessIdentity,
+    });
+    const secret = 'private-cloud-create-description';
+
+    let rejection: unknown;
+    try {
+      await service.submitTask({
+        workspace: '/private/nonexistent/workspace', prompt: 'private prompt',
+        session: { mode: 'cloud_create', description: secret }, execution: { mode: 'async' },
+      });
+    } catch (error) { rejection = error; }
+
+    expect(rejection).toMatchObject({
+      code: 'unsupported-session-mode',
+      message: 'Cloud session creation is unavailable through this noninteractive bridge; create it in Claude Code and use cloud_attach.',
+    });
+    expect(String((rejection as Error).message)).not.toContain(secret);
+    expect(validations).toBe(0);
+    expect(launches).toBe(0);
+    await expect(stat(stateRoot)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('runs no more than two jobs and deterministically schedules the third after a slot is released', async () => {
     const launches: string[] = [];
     const launcher: RunnerLauncher = { launch: async (request) => { launches.push(request.jobId); return { pid: launches.length, birthIdentity: `b${launches.length}` }; } };
