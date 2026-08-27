@@ -4,13 +4,15 @@ Claude Code Bridge is a permission-aware process wrapper, not an operating-syste
 
 ## Inspect access
 
-Inspect is the default. The bridge limits Claude Code tools to `Read,Glob,Grep` and selects plan permissions. It also rejects unsafe workspace roots, including `/`, the home directory itself, nonexistent paths, and canonical-path escapes.
+Inspect is the default. The bridge limits Claude Code tools to `Read,Glob,Grep` and selects plan permissions. It also rejects unsafe workspace roots, including `/`, the home directory itself, nonexistent paths, and a supplied workspace path that traverses a symbolic link.
 
 Inspection reduces intended capability but cannot provide a kernel-level confinement guarantee. Run untrusted repositories in an OS sandbox or disposable virtual machine when stronger isolation is required.
 
 ## Write access
 
-Write must be explicitly selected and the canonical workspace must be a real Git worktree. The bridge uses Claude Code's normal permission system. It never passes `--dangerously-skip-permissions`, `--add-dir`, or equivalent bypasses, and it does not commit or push automatically.
+Write must be explicitly selected and the canonical workspace must be a real Git worktree. Unlike inspect mode, write mode does not apply the `Read,Glob,Grep` tool allowlist: Claude Code may request file changes, commands, network access, or other open-world actions through its normal permission system. The bridge never passes `--dangerously-skip-permissions`, `--add-dir`, or equivalent bypasses.
+
+Write mode authorizes only the local edits the user requested. A commit, push, network action, publication, or other external effect requires separate authorization naming its target and scope; never infer a remote, branch, account, or destination. The bridge does not commit or push automatically.
 
 ## Disabled integrations
 

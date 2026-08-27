@@ -21,7 +21,7 @@ Complete the interactive login yourself, then rerun `claude_health`. Do not past
 
 ## Write workspace is rejected
 
-Write access requires an absolute, existing, canonical path inside a real Git worktree. The filesystem root, the home directory itself, non-Git directories, and symlink escapes are rejected. Initialize a repository only if that is appropriate for the project; otherwise use inspect access.
+Write access requires an absolute, existing, canonical path inside a real Git worktree. The filesystem root, the home directory itself, non-Git directories, and a supplied workspace path that traverses a symbolic link are rejected. Symlinks inside a repository are not an OS confinement boundary. Initialize a repository only if that is appropriate for the project; otherwise use inspect access.
 
 ## Job remains queued
 

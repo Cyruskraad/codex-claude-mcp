@@ -31,8 +31,8 @@ The state root is private (`0700`) and job/control/result files are private (`06
 
 - Access: `inspect`
 - Session: new
-- Execution: auto; wait up to 45 seconds, then return an asynchronous job
-- Timeout: 1,800 seconds; configurable from 30 to 7,200 seconds
+- Execution: auto; `wait_seconds` defaults to 45 and is configurable from 0 to 45 before auto returns an active job asynchronously
+- Timeout: `timeout_seconds` defaults to 1,800 and is configurable from 30 to 7,200; it is the runner deadline in every execution mode and the maximum sync wait
 - Maximum turns: 20; configurable from 1 to 100
 - Concurrent jobs: 2
 - Raw output per job: 32 MiB

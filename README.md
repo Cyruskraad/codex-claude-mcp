@@ -2,7 +2,7 @@
 
 Claude Code Bridge is a local, permission-aware MCP server and Codex plugin that lets Codex delegate coding and repository work to an installed Claude Code CLI. It supports explicit model and effort selection, inspect/write access, resumable sessions, cloud Code sessions when the account supports them, and durable synchronous or asynchronous jobs.
 
-The bridge runs entirely on your computer. It does not host an MCP service, send data to Noodle Cloud, automate the Claude.ai website, or provide access to ordinary Claude.ai chats. Claude Code still communicates with Anthropic under the account and provider configuration of your local CLI.
+The bridge itself runs entirely on your computer. It does not host an MCP service, send data to Noodle Cloud, automate the Claude.ai website, or provide access to ordinary Claude.ai chats. Claude Code still communicates with Anthropic or your configured provider: prompts, repository content Claude reads, tool interactions, session metadata, and generated output may leave your computer under that provider's terms and account settings.
 
 > [!IMPORTANT]
 > This is an independent, unofficial open-source project. It is not affiliated with, endorsed by, or sponsored by OpenAI or Anthropic. Codex, GPT, Claude, and Claude Code are trademarks of their respective owners.

@@ -15,7 +15,7 @@ Terminal states never transition again.
 
 ## Starting and waiting
 
-At most two jobs run concurrently. Additional jobs remain queued. Sync waits only for the requested window; auto mode returns a current job view after that window if work is still running. Returning an asynchronous job does not detach it from timeout, cancellation, output, or retention controls.
+At most two jobs run concurrently. Additional jobs remain queued. Async mode returns immediately. Sync mode waits until the job is terminal or `timeout_seconds` expires. Auto mode waits for `wait_seconds`, then returns a current job view if work is still active. In every mode, `timeout_seconds` remains the runner deadline; returning an asynchronous job does not detach it from timeout, cancellation, output, or retention controls.
 
 ## Status and progress
 

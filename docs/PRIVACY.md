@@ -10,6 +10,8 @@ Claude Code Bridge runs locally and has no bridge-operated service or telemetry 
 4. Claude Code communicates with Anthropic or the provider configured by the user, under Claude Code's own privacy terms and account settings.
 5. The bridge stores bounded job metadata and output locally for lifecycle and pagination.
 
+The bridge is local, but a Claude task is not offline or private to the device. The task prompt, repository files or excerpts Claude Code reads, tool interactions and results, session metadata, and generated output may be transmitted to Anthropic or the configured provider. Inspect mode prevents intended workspace changes; it does not prevent provider data transfer. Provider-side processing, retention, and deletion are outside the bridge and remain governed by the user's Claude Code configuration, account, and provider terms.
+
 Prompts never appear in Claude command-line arguments. A durable queued prompt may briefly exist in a dedicated `0600` request file so a detached runner can consume it; that request is removed after consumption or terminal cleanup. The bridge does not log prompts, credentials, child environments, raw authentication identities, or complete tool results.
 
 ## Retention and deletion

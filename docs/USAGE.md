@@ -4,7 +4,7 @@ Start with `claude_health`. It reports discovery, version/feature readiness, san
 
 ## Start a task
 
-`claude_task` accepts an absolute existing workspace, a prompt, and optional access, model, effort, turn, session, and execution settings.
+`claude_task` accepts an absolute existing workspace, a prompt, and optional access, model, effort, `max_turns`, session, and execution settings.
 
 ```json
 {
@@ -19,7 +19,7 @@ Start with `claude_health`. It reports discovery, version/feature readiness, san
 }
 ```
 
-Use `access: "write"` only when the user has authorized edits. Write workspaces must be real Git worktrees and still use Claude Code's normal permission system.
+Use `access: "write"` only when the user has authorized edits. Write workspaces must be real Git worktrees and still use Claude Code's normal permission system. Local edit authorization does not authorize a commit, push, network action, publication, or other external effect; each requires separate target-scoped authorization.
 
 Model can be a bridge alias (`sonnet`, `opus`, `haiku`, or `fable`) or a full Claude model ID accepted by the installed CLI. Effort can be `low`, `medium`, `high`, `xhigh`, or `max`. Health reports bridge support, not account entitlement.
 
@@ -36,7 +36,7 @@ The bridge never resumes a “most recent” session. Cloud modes work only when
 
 ## Asynchronous jobs
 
-Use `execution.mode: "async"` to return immediately, `"sync"` to wait for the configured period, or `"auto"` to wait and then promote unfinished work to an asynchronous job.
+Use `execution.mode: "async"` to return immediately, `"sync"` to wait until the job is terminal or `timeout_seconds` expires, or `"auto"` to wait for `wait_seconds` and then return the still-active job asynchronously. In every mode, `timeout_seconds` remains the runner deadline.
 
 Poll `claude_job_status` with `job_id`, then call `claude_job_result`. Results are paginated at UTF-8-safe boundaries; pass the returned opaque `next_cursor` until it is absent.
 
