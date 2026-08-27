@@ -18,7 +18,7 @@ export function redactDiagnostic(value: string, options: DiagnosticOptions = {})
     .replace(/\bAuthorization\s*:\s*[^\r\n]*/gi, 'Authorization: [redacted]')
     .replace(/\bsk-ant-(?:api\d+-)?[A-Za-z0-9_-]+\b/g, '[redacted]')
     .replace(/\b(Bearer)\s+[A-Za-z0-9._~+/-]+/gi, '$1 [redacted]')
-    .replace(/\b(API[_-]?KEY|TOKEN|SECRET|PASSWORD|[A-Za-z_][A-Za-z0-9_]*_(?:API[_-]?KEY|TOKEN|SECRET|PASSWORD))\b\s*([:=])\s*[^\s,;]+/gi, '$1$2[redacted]')
+    .replace(/\b(API[_-]?KEY|TOKEN|SECRET|PASSWORD|[A-Za-z_][A-Za-z0-9_]*_(?:API[_-]?KEY|TOKEN|SECRET|PASSWORD))\b\s*([:=])\s*(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*'|[^\s,;]+)/gi, '$1$2[redacted]')
     .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, '[redacted-email]');
 }
 

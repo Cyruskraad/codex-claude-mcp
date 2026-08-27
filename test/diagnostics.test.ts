@@ -42,4 +42,29 @@ describe('diagnostic sanitization', () => {
     const summary = safeErrorSummary({ code: 'claude-failed', message: 'x'.repeat(2_000) });
     expect(summary.message).toHaveLength(1024);
   });
+
+  it('redacts complete quoted and unquoted environment-style assignment values without crossing delimiters', () => {
+    const cases = [
+      {
+        value: 'CUSTOM_PASSWORD="synthetic secret with spaces", status=public; next=visible',
+        expected: 'CUSTOM_PASSWORD=[redacted], status=public; next=visible',
+      },
+      {
+        value: "CUSTOM_SECRET='synthetic secret with an \\'escaped quote\\''; next=visible",
+        expected: 'CUSTOM_SECRET=[redacted]; next=visible',
+      },
+      {
+        value: 'CUSTOM_TOKEN="synthetic secret with spaces"\nnext=visible',
+        expected: 'CUSTOM_TOKEN=[redacted]\nnext=visible',
+      },
+      {
+        value: 'ANTHROPIC_API_KEY=synthetic-unquoted, next=visible; final=public',
+        expected: 'ANTHROPIC_API_KEY=[redacted], next=visible; final=public',
+      },
+    ];
+
+    for (const { value, expected } of cases) {
+      expect(redactDiagnostic(value)).toBe(expected);
+    }
+  });
 });

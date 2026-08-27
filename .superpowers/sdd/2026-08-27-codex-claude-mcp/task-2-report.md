@@ -102,3 +102,35 @@ The initial real-Git test helper invoked `execFile` without its executable argum
 - Terminal state is first-write-wins. Known safe subtypes are additive optional data on `ClaudeError`; raw child error text is never kept.
 - Public compatibility is preserved for existing valid inputs and snapshots: `gitProbe` and error `subtype` are optional additions. The intentional breaking behavior is rejecting previously ignored nested keys and unsafe `ClaudeJob.usage` fields, as required by this security fix.
 - No production module imports the Noodle authoring-only entrypoint; no execution or MCP-registration behavior was added.
+
+## Fix round 2 — quoted assignment redaction
+
+### RED evidence
+
+Added a diagnostics-only test for double-quoted, single-quoted escaped-character, newline-delimited, comma/semicolon-adjacent, and unquoted secret assignments. The focused command:
+
+```text
+npm test -- test/diagnostics.test.ts
+```
+
+initially exited nonzero: `CUSTOM_PASSWORD="synthetic secret with spaces"` became `CUSTOM_PASSWORD=[redacted] secret with spaces"`, proving that the prior unquoted-only value matcher leaked the quoted tail.
+
+### Change and GREEN evidence
+
+The assignment matcher now consumes one complete double-quoted value, one complete single-quoted value, including escaped characters, or an existing unquoted value. It stops before comma, semicolon, whitespace for unquoted values, or newline, preserving subsequent unrelated fields.
+
+| Command | Result |
+| --- | --- |
+| Focused `npm test -- test/diagnostics.test.ts` | 1 file passed, 5 tests passed. |
+| `npm run test:coverage` | 6 files passed, 56 tests passed; 98.17% statements, 85.61% branches, 100% functions, 98.17% lines. |
+| `npm run typecheck` | Passed. |
+| `npm run lint` | Passed. |
+| `npm run build` | Passed. |
+| `npm run validate` | `{"ok":true,"data":{}}`. |
+
+### Regression self-review
+
+- Quoted values are consumed as a single redaction unit; escaped quote characters do not terminate that unit.
+- Unquoted values retain their prior comma/semicolon/whitespace boundaries.
+- Newline is excluded from quoted matching, so a following line remains intact.
+- The change is local to diagnostic sanitization and does not affect task input, stream, workspace, invocation, execution, or MCP boundaries.
