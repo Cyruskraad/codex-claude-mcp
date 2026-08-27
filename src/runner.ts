@@ -30,7 +30,7 @@ export async function runDetachedRunnerMain(argv: string[], dependencies: Runner
   const processId = dependencies.processId ?? process.pid;
   const wait = dependencies.wait ?? (() => new Promise<void>((resolve) => setTimeout(resolve, 10)));
   await store.init();
-  for (let attempts = 0; attempts < (dependencies.maxAttempts ?? 500); attempts += 1) {
+  for (let attempts = 0; attempts < (dependencies.maxAttempts ?? Number.POSITIVE_INFINITY); attempts += 1) {
     const record = await store.read(jobId);
     if (record.job.state === 'running' && record.runner.pid === processId && record.runner.token === runnerToken) {
       const execute = dependencies.execute ?? executeRunner;

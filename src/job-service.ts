@@ -16,6 +16,7 @@ import { validateWorkspace, type ValidatedWorkspace } from './workspace-policy.j
 const MAX_CONCURRENT_JOBS = 2;
 const RESULT_PAGE_BYTES = 65_536;
 const TERMINAL_STATES = new Set(['succeeded', 'failed', 'cancelled', 'timed_out', 'output_limited', 'orphaned']);
+const CURRENT_PROCESS_BIRTH = `${process.pid}:${Math.floor(Date.now() - process.uptime() * 1000)}`;
 
 export interface JobStatusView { job: ClaudeJob; progress_tail: string[] }
 export interface JobResultPage extends JobStatusView { result: string; next_cursor?: string }
@@ -24,7 +25,6 @@ export interface RunnerLaunchRequest { stateRoot: string; jobId: string; runnerT
 export interface RunnerLaunchResult { pid: number; birthIdentity?: string }
 export interface RunnerLauncher { launch(request: RunnerLaunchRequest): Promise<RunnerLaunchResult> }
 export type OwnershipVerifier = (record: InternalJobRecord) => Promise<boolean>;
-export type ProcessGroupTerminator = (pgid: number) => Promise<void>;
 
 export interface JobServiceOptions {
   stateRoot?: string;
@@ -32,7 +32,6 @@ export interface JobServiceOptions {
   workspaceValidator?: (path: string, options: { access: 'inspect' | 'write' }) => Promise<ValidatedWorkspace>;
   launcher?: RunnerLauncher;
   ownershipVerifier?: OwnershipVerifier;
-  processGroupTerminator?: ProcessGroupTerminator;
   idGenerator?: () => string;
   tokenGenerator?: () => string;
   supervisorIntervalMilliseconds?: number;
@@ -93,20 +92,6 @@ export async function verifyRunnerOwnership(record: InternalJobRecord): Promise<
   return true;
 }
 
-async function terminateGroup(pgid: number): Promise<void> {
-  const signal = (name: NodeJS.Signals) => {
-    try { process.kill(-pgid, name); } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
-    }
-  };
-  signal('SIGTERM');
-  await new Promise<void>((resolve) => {
-    const timer = setTimeout(resolve, 1_000);
-    timer.unref();
-  });
-  try { process.kill(-pgid, 0); signal('SIGKILL'); } catch { /* already exited */ }
-}
-
 class DetachedRunnerLauncher implements RunnerLauncher {
   async launch(request: RunnerLaunchRequest): Promise<RunnerLaunchResult> {
     const runnerPath = fileURLToPath(new URL('./runner.mjs', import.meta.url));
@@ -125,13 +110,13 @@ export class JobService {
   private readonly workspaceValidator: NonNullable<JobServiceOptions['workspaceValidator']>;
   private readonly launcher: RunnerLauncher;
   private ownershipVerifier: OwnershipVerifier;
-  private processGroupTerminator: ProcessGroupTerminator;
   private readonly idGenerator: () => string;
   private readonly tokenGenerator: () => string;
   private readonly events = new EventEmitter();
   private supervisor?: NodeJS.Timeout;
   private readonly supervisorIntervalMilliseconds: number;
   private scheduling?: Promise<void>;
+  private rescheduleRequested = false;
   private acceptance: Promise<void> = Promise.resolve();
 
   constructor(options: JobServiceOptions = {}) {
@@ -140,22 +125,36 @@ export class JobService {
     this.workspaceValidator = options.workspaceValidator ?? ((path, policy) => validateWorkspace(path, policy));
     this.launcher = options.launcher ?? new DetachedRunnerLauncher();
     this.ownershipVerifier = options.ownershipVerifier ?? verifyRunnerOwnership;
-    this.processGroupTerminator = options.processGroupTerminator ?? terminateGroup;
     this.idGenerator = options.idGenerator ?? (() => `job_${randomBytes(18).toString('base64url')}`);
     this.tokenGenerator = options.tokenGenerator ?? (() => randomBytes(24).toString('base64url'));
     this.supervisorIntervalMilliseconds = options.supervisorIntervalMilliseconds ?? 250;
   }
 
   setOwnershipVerifier(verifier: OwnershipVerifier): void { this.ownershipVerifier = verifier; }
-  setProcessGroupTerminator(terminator: ProcessGroupTerminator): void { this.processGroupTerminator = terminator; }
+
+  private async runnerIsLive(record: InternalJobRecord): Promise<boolean> {
+    const launching = record.runner.birthIdentity?.match(/^launching:(.+)$/);
+    if (launching && record.runner.pid) {
+      if (record.runner.pid === process.pid) return launching[1] === CURRENT_PROCESS_BIRTH;
+      const observed = await processBirthIdentity(record.runner.pid);
+      return observed !== undefined && observed === launching[1];
+    }
+    return this.ownershipVerifier(record);
+  }
 
   async startup(): Promise<void> {
     await this.store.init();
     await this.cleanup();
     for (const record of await this.store.list()) {
       if (record.job.state !== 'running') continue;
-      if (await this.store.recoverTerminalIntent(record.job.id)) continue;
-      if (await this.ownershipVerifier(record)) continue;
+      const live = await this.runnerIsLive(record);
+      const control = await this.store.readControl(record.job.id);
+      if (control.terminalIntent) {
+        if (live) continue;
+        await this.store.finalizeTerminalIntent(record.job.id);
+        continue;
+      }
+      if (live) continue;
       try {
         await this.store.publishTerminal(record.job.id, record.revision, {
           state: 'orphaned', result: Buffer.alloc(0), error: { code: 'orphaned', message: 'Claude runner ownership could not be verified.' },
@@ -173,6 +172,7 @@ export class JobService {
 
   private async supervise(): Promise<void> {
     await this.schedule();
+    await this.cleanup();
     const records = await this.store.list();
     for (const record of records) if (TERMINAL_STATES.has(record.job.state)) this.notifyChanged(record.job.id);
   }
@@ -201,62 +201,58 @@ export class JobService {
   }
 
   async schedule(): Promise<void> {
-    if (this.scheduling) return this.scheduling;
-    this.scheduling = this.scheduleInternal().finally(() => { this.scheduling = undefined; });
+    if (this.scheduling) {
+      this.rescheduleRequested = true;
+      return this.scheduling;
+    }
+    this.scheduling = (async () => {
+      do {
+        this.rescheduleRequested = false;
+        await this.scheduleInternal();
+      } while (this.rescheduleRequested);
+    })().finally(() => { this.scheduling = undefined; });
     return this.scheduling;
   }
 
   private async scheduleInternal(): Promise<void> {
-    const records: InternalJobRecord[] = [];
-    for (const record of await this.store.list()) {
-      if (['queued', 'running'].includes(record.job.state)) {
-        const recovered = await this.store.recoverTerminalIntent(record.job.id);
-        if (recovered) {
-          if (TERMINAL_STATES.has(recovered.job.state)) this.notifyChanged(recovered.job.id);
-          continue;
-        }
-      }
-      records.push(record);
-    }
-    let running = 0;
-    for (const record of records.filter((candidate) => candidate.job.state === 'running')) {
-      if (await this.ownershipVerifier(record)) {
-        running += 1;
-        continue;
-      }
-      try {
-        await this.store.publishTerminal(record.job.id, record.revision, {
+    const claimed = await this.store.withSchedulerLease(async () => {
+      const records = await this.store.list();
+      const launches: InternalJobRecord[] = [];
+      let running = 0;
+      for (const record of records.filter((candidate) => candidate.job.state === 'running')) {
+        const live = await this.runnerIsLive(record);
+        const control = await this.store.readControl(record.job.id);
+        if (control.terminalIntent) {
+          if (live) running += 1;
+          else await this.store.finalizeTerminalIntent(record.job.id);
+        } else if (live) running += 1;
+        else await this.store.publishTerminal(record.job.id, record.revision, {
           state: 'orphaned', result: Buffer.alloc(0), error: { code: 'orphaned', message: 'Claude runner ownership could not be verified.' },
         });
-        this.notifyChanged(record.job.id);
-      } catch (error) {
-        if (!(error instanceof JobStoreError && error.code === 'stale-revision')) throw error;
       }
-    }
-    for (const queued of records.filter((record) => record.job.state === 'queued')) {
-      if (running >= MAX_CONCURRENT_JOBS) break;
-      let claimed: InternalJobRecord;
-      try {
-        claimed = await this.store.claim(queued.job.id, queued.revision, { pid: process.pid, birthIdentity: 'launching' });
-      } catch (error) {
-        if (error instanceof JobStoreError && ['stale-revision', 'terminal-intent'].includes(error.code)) {
-          await this.store.recoverTerminalIntent(queued.job.id);
+      for (const queued of records.filter((record) => record.job.state === 'queued')) {
+        const control = await this.store.readControl(queued.job.id);
+        if (control.terminalIntent) {
+          await this.store.finalizeTerminalIntent(queued.job.id);
           continue;
         }
-        throw error;
+        if (running >= MAX_CONCURRENT_JOBS) break;
+        launches.push(await this.store.claim(queued.job.id, queued.revision, { pid: process.pid, birthIdentity: `launching:${CURRENT_PROCESS_BIRTH}` }));
+        running += 1;
       }
-      running += 1;
+      return launches;
+    });
+    for (const job of claimed) {
       try {
-        const launched = await this.launcher.launch({ stateRoot: this.store.stateRoot, jobId: claimed.job.id, runnerToken: claimed.runner.token });
-        const latest = await this.store.read(claimed.job.id);
+        const launched = await this.launcher.launch({ stateRoot: this.store.stateRoot, jobId: job.job.id, runnerToken: job.runner.token });
+        const latest = await this.store.read(job.job.id);
         if (latest.job.state === 'running') await this.store.updateRunner(latest.job.id, latest.revision, launched);
       } catch {
-        const latest = await this.store.read(claimed.job.id);
+        const latest = await this.store.read(job.job.id);
         if (latest.job.state === 'running') {
           await this.store.publishTerminal(latest.job.id, latest.revision, {
             state: 'failed', result: Buffer.alloc(0), error: { code: 'internal-error', message: 'Claude runner could not be started.' },
           });
-          running -= 1;
         }
       }
     }
@@ -265,6 +261,7 @@ export class JobService {
   notifyChanged(jobId: string): void {
     this.events.emit(jobId);
     void this.schedule();
+    void this.cleanup();
   }
 
   async getJobStatus(jobId: string): Promise<JobStatusView> {
@@ -292,10 +289,11 @@ export class JobService {
     try { record = await this.store.read(jobId); } catch (error) { return asContractError(error); }
     if (record.job.state === 'cancelled') return { job: record.job, progress_tail: record.progressTail };
     if (TERMINAL_STATES.has(record.job.state)) throw new ClaudeContractError('job-not-terminal', 'Terminal Claude job cannot be cancelled.');
-    const pgid = record.runner.claudePgid;
-    const shouldTerminate = record.job.state === 'running' && pgid !== undefined && await this.ownershipVerifier(record);
-    try { record = await this.store.setTerminalIntent(jobId, record.revision, 'cancelled'); } catch (error) { return asContractError(error); }
-    if (shouldTerminate && pgid !== undefined) await this.processGroupTerminator(pgid);
+    try {
+      await this.store.requestTerminalIntent(jobId, record.revision, 'cancelled');
+      if (record.job.state === 'queued') record = (await this.store.finalizeTerminalIntent(jobId)) ?? record;
+      else record = await this.store.read(jobId);
+    } catch (error) { return asContractError(error); }
     this.notifyChanged(jobId);
     return { job: record.job, progress_tail: record.progressTail };
   }
@@ -332,7 +330,7 @@ export class JobService {
         offset = parsed.offset;
       } catch { throw new ClaudeContractError('invalid-input', 'Result cursor is invalid.'); }
     }
-    const bytes = await readFile(this.store.paths(jobId).result);
+    const bytes = await this.store.readResult(jobId);
     const digest = createHash('sha256').update(bytes).digest('hex');
     if (bytes.byteLength !== record.result.byteLength || digest !== record.result.sha256 || offset > bytes.byteLength) {
       throw new ClaudeContractError('invalid-input', 'Result cursor is stale.');

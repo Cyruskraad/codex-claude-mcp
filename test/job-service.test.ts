@@ -62,15 +62,14 @@ describe('durable job lifecycle service', () => {
     expect((await waiting.service.store.list()).length).toBe(1);
   });
 
-  it('cancels queued work and running work only after ownership verification, with sticky terminal state', async () => {
-    const killed: number[] = [];
+  it('cancels via durable control only and never signals a persisted process identity', async () => {
     const { workspace, service } = await setup({ launch: async () => ({ pid: 44, birthIdentity: 'runner-birth' }) });
     const first = await service.submitTask({ workspace, prompt: 'one', execution: { mode: 'async' } });
-    await service.store.updateRunner(first.job.id, (await service.store.read(first.job.id)).revision, { claudePgid: 45 });
     service.setOwnershipVerifier(async () => true);
-    service.setProcessGroupTerminator(async (pgid) => { killed.push(pgid); });
-    expect((await service.cancelJob(first.job.id)).job.state).toBe('cancelled');
-    expect(killed).toEqual([45]);
+    expect((await service.cancelJob(first.job.id)).job.state).toBe('running');
+    expect((await service.store.readControl(first.job.id)).terminalIntent).toBe('cancelled');
+    await service.store.finalizeTerminalIntent(first.job.id);
+    expect((await service.getJobStatus(first.job.id)).job.state).toBe('cancelled');
 
     const queueContext = await setup({ launch: async () => ({ pid: 70, birthIdentity: 'queued-test' }) });
     await queueContext.service.submitTask({ workspace: queueContext.workspace, prompt: 'occupy one', execution: { mode: 'async' } });
@@ -83,12 +82,78 @@ describe('durable job lifecycle service', () => {
     await expect(stat(queueContext.service.store.paths(queued.job.id).request)).rejects.toMatchObject({ code: 'ENOENT' });
     expect((await service.cancelJob(first.job.id)).job.state).toBe('cancelled');
     await expect(stat(service.store.paths(first.job.id).request)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
 
-    const mismatch = await service.submitTask({ workspace, prompt: 'two', execution: { mode: 'async' } });
-    await service.store.updateRunner(mismatch.job.id, (await service.store.read(mismatch.job.id)).revision, { claudePgid: 99 });
+  it('serializes count and claim across two service instances sharing one state root', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'codex-claude-global-cap-'));
+    const workspace = join(root, 'workspace');
+    await mkdir(workspace);
+    const launches: string[] = [];
+    const make = (prefix: string) => new JobService({
+      stateRoot: join(root, 'state'), workspaceValidator: async (path) => ({ canonicalPath: path }),
+      launcher: { launch: async ({ jobId }) => { launches.push(jobId); return { pid: 100 + launches.length, birthIdentity: jobId }; } },
+      ownershipVerifier: async () => true,
+      idGenerator: (() => { let id = 0; return () => `job_${prefix}_${++id}`; })(),
+    });
+    const left = make('left');
+    const right = make('right');
+    await Promise.all([left.startup(), right.startup()]);
+    await Promise.all([
+      left.submitTask({ workspace, prompt: 'l1', execution: { mode: 'async' } }),
+      right.submitTask({ workspace, prompt: 'r1', execution: { mode: 'async' } }),
+      left.submitTask({ workspace, prompt: 'l2', execution: { mode: 'async' } }),
+      right.submitTask({ workspace, prompt: 'r2', execution: { mode: 'async' } }),
+    ]);
+    expect(launches).toHaveLength(2);
+    expect((await left.store.list()).filter((record) => record.job.state === 'running')).toHaveLength(2);
+    await Promise.all([left.shutdown(), right.shutdown()]);
+  });
+
+  it('keeps a launch handoff owned and carries cancellation control to the acknowledged runner', async () => {
+    let release!: () => void;
+    let launched!: () => void;
+    const launchStarted = new Promise<void>((resolve) => { launched = resolve; });
+    const launchReleased = new Promise<void>((resolve) => { release = resolve; });
+    const { workspace, service } = await setup({ launch: async () => {
+      launched(); await launchReleased; return { pid: 404, birthIdentity: 'runner-404' };
+    } });
+    const submission = service.submitTask({ workspace, prompt: 'race', execution: { mode: 'async' } });
+    await launchStarted;
+    const pending = (await service.store.list()).find((record) => record.task.workspace === workspace)!;
+    expect(pending.runner.birthIdentity).toMatch(/^launching:/);
+    expect((await service.cancelJob(pending.job.id)).job.state).toBe('running');
+    release();
+    await submission;
+    const handedOff = await service.store.read(pending.job.id);
+    expect(handedOff.runner).toMatchObject({ pid: 404, birthIdentity: 'runner-404' });
+    expect((await service.store.readControl(pending.job.id)).terminalIntent).toBe('cancelled');
+  });
+
+  it('runs a requested follow-up scheduler pass after an in-flight launch finishes', async () => {
+    let release!: () => void;
+    let started!: () => void;
+    const launchStarted = new Promise<void>((resolve) => { started = resolve; });
+    const launchReleased = new Promise<void>((resolve) => { release = resolve; });
+    const { workspace, service } = await setup({ launch: async () => {
+      started(); await launchReleased; return { pid: 405, birthIdentity: 'runner-405' };
+    } });
+    const submission = service.submitTask({ workspace, prompt: 'reschedule', execution: { mode: 'async' } });
+    await launchStarted;
     service.setOwnershipVerifier(async () => false);
-    await service.cancelJob(mismatch.job.id);
-    expect(killed).toEqual([45]);
+    const requestedPass = service.schedule();
+    release();
+    await Promise.all([submission, requestedPass]);
+    const [record] = await service.store.list();
+    expect(record.job.state).toBe('orphaned');
+  });
+
+  it('retains a proven-live runner while its durable terminal intent awaits runner handling', async () => {
+    const { workspace, service } = await setup();
+    const submitted = await service.submitTask({ workspace, prompt: 'runner owns cancellation', execution: { mode: 'async' } });
+    const record = await service.store.read(submitted.job.id);
+    await service.store.requestTerminalIntent(record.job.id, record.revision, 'cancelled');
+    await service.schedule();
+    expect((await service.getJobStatus(record.job.id)).job.state).toBe('running');
   });
 
   it('retains proven live runners, orphans unverifiable runners without killing, and resumes queued work on startup', async () => {
@@ -113,7 +178,7 @@ describe('durable job lifecycle service', () => {
   it('does not count an unverifiable running job as a concurrency slot', async () => {
     const { workspace, service } = await setup();
     const first = await service.submitTask({ workspace, prompt: 'unverifiable', execution: { mode: 'async' } });
-    service.setOwnershipVerifier(async () => false);
+    service.setOwnershipVerifier(async (record) => record.job.id !== first.job.id);
     await service.schedule();
     expect((await service.getJobStatus(first.job.id)).job.state).toBe('orphaned');
     const replacement = await service.submitTask({ workspace, prompt: 'replacement', execution: { mode: 'async' } });

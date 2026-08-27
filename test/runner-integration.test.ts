@@ -9,6 +9,11 @@ import { executeRunner } from '../src/runner-engine.js';
 
 const fakeClaude = fileURLToPath(new URL('./fixtures/fake-claude.mjs', import.meta.url));
 const originalEnv = { ...process.env };
+const inspectArgs = [
+  '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
+  '--max-turns', '20', '--no-chrome', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
+  '--disallowedTools', 'mcp__*', '--tools', 'Read,Glob,Grep', '--permission-mode', 'plan',
+];
 
 beforeAll(async () => chmod(fakeClaude, 0o755));
 afterEach(() => {
@@ -38,7 +43,7 @@ describe('detached Claude runner integration', () => {
     await executeRunner({ store, jobId: running.job.id, runnerToken: 'runner_token', claudePath: fakeClaude });
     const final = await store.read(running.job.id);
     expect(final.job).toMatchObject({ state: 'succeeded', claude_session_id: 'sess_fake', exit_code: 0, usage: { input_tokens: 3, output_tokens: 4 }, total_cost_usd: 0.012, result_preview: 'héllo 🌍' });
-    expect(JSON.parse(await readFile(join(control, 'argv.json'), 'utf8'))).toEqual(expect.arrayContaining(['--resume', 'sess_original']));
+    expect(JSON.parse(await readFile(join(control, 'argv.json'), 'utf8'))).toEqual([...inspectArgs, '--resume', 'sess_original']);
     expect(await readFile(join(control, 'stdin.txt'), 'utf8')).toContain('super secret prompt');
     expect(JSON.stringify(final)).not.toContain('super secret prompt');
     expect(await readFile(store.paths(running.job.id).rawStdout, 'utf8')).not.toContain('super secret prompt');
@@ -66,7 +71,7 @@ describe('detached Claude runner integration', () => {
     expect(await readFile(store.paths(running.job.id).result, 'utf8')).toBe('');
   });
 
-  it.each(['not a version', '2.0.9', '1.99.99'])('rejects malformed or too-old Claude version %s', async (version) => {
+  it.each(['not a version', '2.0.9', '1.99.99', '2.1.0-beta.1', '2.1.0 garbage'])('rejects malformed, prerelease, suffixed, or too-old Claude version %s', async (version) => {
     process.env.FAKE_CLAUDE_VERSION = version;
     const { store, running } = await setup('success');
     await executeRunner({ store, jobId: running.job.id, runnerToken: 'runner_token', claudePath: fakeClaude });
@@ -96,7 +101,7 @@ describe('detached Claude runner integration', () => {
     const { control, store, running } = await setup('success', { session });
     await executeRunner({ store, jobId: running.job.id, runnerToken: 'runner_token', claudePath: fakeClaude });
     const args = JSON.parse(await readFile(join(control, 'argv.json'), 'utf8')) as string[];
-    expect(args.slice(-expected.length)).toEqual(expected);
+    expect(args).toEqual([...inspectArgs, ...expected]);
     expect(args.join(' ')).not.toContain('super secret prompt');
   });
 
@@ -105,12 +110,19 @@ describe('detached Claude runner integration', () => {
     const { store, running } = await setup('hang');
     let deadline!: () => void;
     const kills: string[] = [];
+    let childPid = 0;
     await executeRunner({
       store, jobId: running.job.id, runnerToken: 'runner_token', claudePath: fakeClaude,
       scheduleDeadline: (callback) => { deadline = callback; return () => undefined; },
-      terminateProcessGroup: async (_pgid, signal) => { kills.push(signal); if (signal === 'SIGKILL') process.kill(_pgid, signal); },
+      runnerPid: 777,
+      signalRunnerGroup: async (runnerPid, signal) => {
+        expect(runnerPid).toBe(777);
+        expect((await store.readControl(running.job.id)).terminalIntent).toBe('timed_out');
+        kills.push(signal);
+        if (signal === 'SIGKILL') process.kill(childPid, signal);
+      },
       waitForGrace: async () => undefined,
-      onClaudeSpawned: () => deadline(),
+      onClaudeSpawned: (pid, topology) => { childPid = pid; expect(topology).toEqual({ detached: false }); deadline(); },
     });
     expect(kills).toEqual(['SIGTERM', 'SIGKILL']);
     expect((await store.read(running.job.id)).job).toMatchObject({ state: 'timed_out', error: { code: 'timed-out' } });
@@ -124,10 +136,14 @@ describe('detached Claude runner integration', () => {
   ])('counts byte output without requiring newlines (%s)', async (scenario, bytes, limit, expectedState) => {
     process.env.FAKE_OUTPUT_BYTES = String(bytes);
     const { store, running } = await setup(scenario);
+    let childPid = 0;
     await executeRunner({
       store, jobId: running.job.id, runnerToken: 'runner_token', claudePath: fakeClaude, outputLimitBytes: limit,
-      terminateProcessGroup: async (pgid, signal) => {
-        try { process.kill(pgid, signal); } catch (error) {
+      runnerPid: 888,
+      onClaudeSpawned: (pid) => { childPid = pid; },
+      signalRunnerGroup: async (runnerPid, signal) => {
+        expect(runnerPid).toBe(888);
+        try { process.kill(childPid, signal); } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
         }
       },
@@ -137,5 +153,69 @@ describe('detached Claude runner integration', () => {
     expect(final.rawByteCount).toBe(Math.min(bytes, limit));
     expect(final.job.state).toBe(expectedState);
     expect((await stat(store.paths(running.job.id).rawStdout)).size).toBe(0);
+  });
+
+  it.each([[16, 16, 'failed'], [16, 17, 'output_limited']] as const)(
+    'enforces one combined stdout+stderr cap at the exact boundary (%i + %i)', async (stdoutBytes, stderrBytes, state) => {
+      process.env.FAKE_STDOUT_BYTES = String(stdoutBytes);
+      process.env.FAKE_STDERR_BYTES = String(stderrBytes);
+      const { store, running } = await setup('combined-bytes');
+      let childPid = 0;
+      await executeRunner({
+        store, jobId: running.job.id, runnerToken: 'runner_token', claudePath: fakeClaude, outputLimitBytes: 32,
+        runnerPid: 889, onClaudeSpawned: (pid) => { childPid = pid; }, waitForGrace: async () => undefined,
+        signalRunnerGroup: async (_pid, signal) => { try { process.kill(childPid, signal); } catch { /* already reaped */ } },
+      });
+      const final = await store.read(running.job.id);
+      expect(final.rawByteCount).toBe(32);
+      expect(final.job.state).toBe(state);
+    },
+  );
+
+  it('stops a sustained no-newline TERM-ignoring flood after durable intent, then orders TERM before KILL', async () => {
+    const { store, running } = await setup('flood');
+    let childPid = 0;
+    const events: string[] = [];
+    await executeRunner({
+      store, jobId: running.job.id, runnerToken: 'runner_token', claudePath: fakeClaude, outputLimitBytes: 1024,
+      runnerPid: 890, onClaudeSpawned: (pid) => { childPid = pid; }, waitForGrace: async () => undefined,
+      signalRunnerGroup: async (_pid, signal) => {
+        events.push(`${(await store.readControl(running.job.id)).terminalIntent}:${signal}`);
+        if (signal === 'SIGKILL') process.kill(childPid, signal);
+      },
+    });
+    expect(events).toEqual(['output_limited:SIGTERM', 'output_limited:SIGKILL']);
+    expect((await store.read(running.job.id))).toMatchObject({ rawByteCount: 1024, job: { state: 'output_limited' } });
+  });
+
+  it('bounds a hanging version probe by the total job deadline', async () => {
+    process.env.FAKE_VERSION_SCENARIO = 'hang';
+    const { store, running } = await setup('success');
+    let deadline!: () => void;
+    let preflightPid = 0;
+    const signals: string[] = [];
+    await executeRunner({
+      store, jobId: running.job.id, runnerToken: 'runner_token', claudePath: fakeClaude, runnerPid: 891,
+      scheduleDeadline: (callback) => { deadline = callback; return () => undefined; },
+      onPreflightSpawned: (pid) => { preflightPid = pid; deadline(); }, waitForGrace: async () => undefined,
+      signalRunnerGroup: async (_pid, signal) => { signals.push(signal); if (signal === 'SIGKILL') process.kill(preflightPid, signal); },
+    });
+    expect(signals).toEqual(['SIGTERM', 'SIGKILL']);
+    expect((await store.read(running.job.id)).job.state).toBe('timed_out');
+  });
+
+  it('observes service cancellation control and signals only from the live runner', async () => {
+    process.env.FAKE_CLAUDE_IGNORE_TERM = '1';
+    const { store, running } = await setup('hang');
+    let childPid = 0;
+    const signals: string[] = [];
+    await executeRunner({
+      store, jobId: running.job.id, runnerToken: 'runner_token', claudePath: fakeClaude, runnerPid: 892,
+      controlPollMilliseconds: 1, waitForGrace: async () => undefined,
+      onClaudeSpawned: (pid) => { childPid = pid; void store.requestTerminalIntent(running.job.id, running.revision, 'cancelled'); },
+      signalRunnerGroup: async (_pid, signal) => { signals.push(signal); if (signal === 'SIGKILL') process.kill(childPid, signal); },
+    });
+    expect(signals).toEqual(['SIGTERM', 'SIGKILL']);
+    expect((await store.read(running.job.id)).job.state).toBe('cancelled');
   });
 });

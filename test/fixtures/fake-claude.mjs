@@ -7,6 +7,14 @@ const control = process.env.FAKE_CLAUDE_CONTROL_DIR;
 const scenario = process.env.FAKE_CLAUDE_SCENARIO ?? 'success';
 
 if (process.argv.includes('--version')) {
+  if (process.env.FAKE_VERSION_SCENARIO === 'flood') {
+    process.stdout.write(Buffer.alloc(4097, 118));
+    process.exit(0);
+  }
+  if (process.env.FAKE_VERSION_SCENARIO === 'hang') {
+    process.on('SIGTERM', () => undefined);
+    await new Promise(() => undefined);
+  }
   process.stdout.write(process.env.FAKE_CLAUDE_VERSION ?? '2.1.0 (Claude Code)\n');
   process.exit(0);
 }
@@ -58,5 +66,20 @@ switch (scenario) {
   }
   case 'stdout-bytes': process.stdout.write(Buffer.alloc(Number(process.env.FAKE_OUTPUT_BYTES), 120)); break;
   case 'stderr-bytes': process.stderr.write(Buffer.alloc(Number(process.env.FAKE_OUTPUT_BYTES), 121)); break;
+  case 'combined-bytes': {
+    process.stdout.write(Buffer.alloc(Number(process.env.FAKE_STDOUT_BYTES), 120));
+    process.stderr.write(Buffer.alloc(Number(process.env.FAKE_STDERR_BYTES), 121));
+    break;
+  }
+  case 'flood': {
+    process.on('SIGTERM', () => undefined);
+    process.stdout.on('error', () => undefined);
+    process.stderr.on('error', () => undefined);
+    await new Promise(() => {
+      const bytes = Buffer.alloc(64 * 1024, 122);
+      setInterval(() => { process.stdout.write(bytes); process.stderr.write(bytes); }, 0);
+    });
+    break;
+  }
   default: process.exitCode = 91;
 }

@@ -1,7 +1,8 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { constants } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { constants, readFileSync } from 'node:fs';
 import {
-  access, chmod, mkdir, open, readFile, readdir, rename, rm, stat, unlink,
+  chmod, lstat, mkdir, open, readdir, rename, rm, stat, unlink,
 } from 'node:fs/promises';
 import { homedir, platform as osPlatform } from 'node:os';
 import { isAbsolute, join } from 'node:path';
@@ -14,6 +15,10 @@ import {
 export const RESULT_VERSION = 1;
 export const RETENTION_MILLISECONDS = 7 * 24 * 60 * 60 * 1000;
 const JOB_ID_PATTERN = /^job_[A-Za-z0-9_-]{1,123}$/;
+const STAGING_PATTERN = /^\.create-(job_[A-Za-z0-9_-]{1,123})-[a-f0-9]{16}$/;
+
+export interface LeaseOwner { token: string; pid: number; birthIdentity: string }
+export type LeaseOwnerVerifier = (owner: LeaseOwner) => Promise<boolean>;
 
 export interface Clock { now(): Date }
 
@@ -57,7 +62,6 @@ const RunnerRecordSchema = z.object({
   pid: z.number().int().positive().optional(),
   heartbeat: z.string().datetime().optional(),
   birthIdentity: z.string().min(1).max(512).optional(),
-  claudePgid: z.number().int().positive().optional(),
 }).strict();
 export type RunnerRecord = z.infer<typeof RunnerRecordSchema>;
 
@@ -86,7 +90,7 @@ const InternalJobRecordSchema = z.object({
     if (!record.runner.pid || !record.runner.heartbeat) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Running state requires runner ownership.' });
   }
   if (terminal !== Boolean(record.result)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Terminal state and result metadata must be published together.' });
-  if (!terminal && record.terminalIntent) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Nonterminal state forbids terminal intent.' });
+  if (!terminal && record.terminalIntent) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Nonterminal state forbids published terminal intent.' });
   if (record.terminalIntent && record.terminalIntent !== record.job.state) {
     context.addIssue({ code: z.ZodIssueCode.custom, message: 'Terminal intent must match the terminal state.' });
   }
@@ -122,6 +126,32 @@ export class JobStoreError extends Error {
 export interface JobStoreOptions {
   stateRoot?: string;
   clock?: Clock;
+  leaseOwner?: LeaseOwner;
+  leaseOwnerVerifier?: LeaseOwnerVerifier;
+  lockWaitMilliseconds?: number;
+}
+
+const leaseOwnerSchema = z.object({ token: z.string().min(1), pid: z.number().int().positive(), birthIdentity: z.string().min(1) }).strict();
+
+async function defaultLeaseOwnerVerifier(owner: LeaseOwner): Promise<boolean> {
+  try { process.kill(owner.pid, 0); } catch (error) { return (error as NodeJS.ErrnoException).code !== 'ESRCH'; }
+  const observed = processBirthIdentity(owner.pid);
+  return observed === undefined || observed === owner.birthIdentity;
+}
+
+function processBirthIdentity(pid: number): string | undefined {
+  if (osPlatform() === 'linux') {
+    try {
+      const value = readFileSync(`/proc/${pid}/stat`, 'utf8');
+      const closing = value.lastIndexOf(')');
+      return value.slice(closing + 2).split(' ')[19];
+    } catch { return undefined; }
+  }
+  if (osPlatform() === 'darwin') {
+    const value = spawnSync('ps', ['-p', String(pid), '-o', 'lstart='], { encoding: 'utf8', timeout: 1_000 });
+    return value.status === 0 ? value.stdout.trim() || undefined : undefined;
+  }
+  return undefined;
 }
 
 async function atomicWrite(path: string, bytes: Buffer | string, mode = 0o600): Promise<void> {
@@ -161,6 +191,9 @@ export class JobStore {
   readonly clock: Clock;
   readonly jobsRoot: string;
   readonly cursorKeyPath: string;
+  private readonly leaseOwner: LeaseOwner;
+  private readonly leaseOwnerVerifier: LeaseOwnerVerifier;
+  private readonly lockWaitMilliseconds: number;
 
   constructor(options: JobStoreOptions = {}) {
     this.stateRoot = options.stateRoot ?? resolveStateRoot();
@@ -168,6 +201,12 @@ export class JobStore {
     this.clock = options.clock ?? { now: () => new Date() };
     this.jobsRoot = join(this.stateRoot, 'jobs');
     this.cursorKeyPath = join(this.stateRoot, 'cursor.key');
+    this.leaseOwner = options.leaseOwner ?? {
+      token: randomBytes(16).toString('hex'), pid: process.pid,
+      birthIdentity: processBirthIdentity(process.pid) ?? `${process.pid}:${Math.floor(Date.now() - process.uptime() * 1000)}`,
+    };
+    this.leaseOwnerVerifier = options.leaseOwnerVerifier ?? defaultLeaseOwnerVerifier;
+    this.lockWaitMilliseconds = options.lockWaitMilliseconds ?? 5_000;
   }
 
   paths(jobId: string) {
@@ -184,20 +223,51 @@ export class JobStore {
   }
 
   async init(): Promise<void> {
-    await mkdir(this.stateRoot, { recursive: true, mode: 0o700 });
+    try {
+      const existing = await lstat(this.stateRoot);
+      if (!existing.isDirectory() || existing.isSymbolicLink()) throw new JobStoreError('internal-error', 'Private state root is unsafe.');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      await mkdir(this.stateRoot, { recursive: true, mode: 0o700 });
+    }
     await chmod(this.stateRoot, 0o700);
-    await mkdir(this.jobsRoot, { recursive: true, mode: 0o700 });
+    try {
+      const existing = await lstat(this.jobsRoot);
+      if (!existing.isDirectory() || existing.isSymbolicLink()) throw new JobStoreError('internal-error', 'Private jobs root is unsafe.');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      try { await mkdir(this.jobsRoot, { mode: 0o700 }); }
+      catch (mkdirError) { if ((mkdirError as NodeJS.ErrnoException).code !== 'EEXIST') throw mkdirError; }
+    }
     await chmod(this.jobsRoot, 0o700);
     try {
-      await access(this.cursorKeyPath);
+      const key = await lstat(this.cursorKeyPath);
+      if (!key.isFile() || key.isSymbolicLink()) throw new JobStoreError('internal-error', 'Private cursor key is unsafe.');
       await chmod(this.cursorKeyPath, 0o600);
-    } catch {
-      await atomicWrite(this.cursorKeyPath, randomBytes(32));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      let keyHandle;
+      try {
+        keyHandle = await open(this.cursorKeyPath, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
+        await keyHandle.writeFile(randomBytes(32)); await keyHandle.sync();
+      } catch (writeError) { if ((writeError as NodeJS.ErrnoException).code !== 'EEXIST') throw writeError; }
+      finally { await keyHandle?.close(); }
     }
+    await this.cleanupCrashRemnants();
+    const warnings = await this.verifyPrivateModes();
+    if (warnings.length > 0) throw new JobStoreError('internal-error', 'Private state permissions are ineffective.');
   }
 
   async cursorKey(): Promise<Buffer> {
-    return readFile(this.cursorKeyPath);
+    const handle = await open(this.cursorKeyPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try { return await handle.readFile(); } finally { await handle.close(); }
+  }
+
+  async readResult(jobId: string): Promise<Buffer> {
+    try {
+      const handle = await open(this.paths(jobId).result, constants.O_RDONLY | constants.O_NOFOLLOW);
+      try { return await handle.readFile(); } finally { await handle.close(); }
+    } catch { throw new JobStoreError('internal-error', 'Private Claude result is unavailable.'); }
   }
 
   async create(task: NormalizedClaudeTaskInput, id: string, runnerToken: string): Promise<InternalJobRecord> {
@@ -211,8 +281,15 @@ export class JobStore {
       result: join(directory, 'result.bin'),
       rawStdout: join(directory, 'stdout.raw'),
     };
+    try {
+      await lstat(finalPaths.directory);
+      throw new JobStoreError('invalid-input', 'Claude job identifier already exists.');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
     await mkdir(directory, { mode: 0o700 });
     await chmod(directory, 0o700);
+    await atomicWrite(join(directory, '.owner.json'), JSON.stringify(this.leaseOwner));
     const now = this.clock.now().toISOString();
     const storedTask: StoredTask = {
       workspace: task.workspace,
@@ -246,7 +323,12 @@ export class JobStore {
 
   async read(jobId: string): Promise<InternalJobRecord> {
     try {
-      return InternalJobRecordSchema.parse(JSON.parse(await readFile(this.paths(jobId).state, 'utf8')));
+      const paths = this.paths(jobId);
+      const directory = await lstat(paths.directory);
+      if (!directory.isDirectory() || directory.isSymbolicLink()) throw new Error('unsafe');
+      const handle = await open(paths.state, constants.O_RDONLY | constants.O_NOFOLLOW);
+      try { return InternalJobRecordSchema.parse(JSON.parse((await handle.readFile()).toString('utf8'))); }
+      finally { await handle.close(); }
     } catch (error) {
       if (error instanceof JobStoreError) throw error;
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new JobStoreError('job-not-found', 'Claude job was not found.');
@@ -277,8 +359,8 @@ export class JobStore {
     return records.sort((left, right) => left.job.created_at.localeCompare(right.job.created_at) || left.job.id.localeCompare(right.job.id));
   }
 
-  private async commit(record: InternalJobRecord, expectedRevision: number): Promise<InternalJobRecord> {
-    return this.withJobLock(record.job.id, () => this.commitUnlocked(record, expectedRevision));
+  private async commit(record: InternalJobRecord, expectedRevision: number, allowedTerminalIntent?: 'cancelled' | 'timed_out' | 'output_limited'): Promise<InternalJobRecord> {
+    return this.withJobLock(record.job.id, () => this.commitUnlocked(record, expectedRevision, allowedTerminalIntent));
   }
 
   private async commitUnlocked(
@@ -289,7 +371,7 @@ export class JobStore {
     const current = await this.read(record.job.id);
     if (current.revision !== expectedRevision) throw new JobStoreError('stale-revision', 'Stored job revision changed.');
     const control = await this.readControl(record.job.id);
-    if (control.terminalIntent && control.revision > current.revision && control.terminalIntent !== allowedTerminalIntent) {
+    if (control.terminalIntent && control.terminalIntent !== allowedTerminalIntent) {
       throw new JobStoreError('terminal-intent', 'A durable terminal intent already owns this job.');
     }
     const parsed = InternalJobRecordSchema.parse({ ...record, revision: expectedRevision + 1 });
@@ -298,24 +380,49 @@ export class JobStore {
   }
 
   private async withJobLock<T>(jobId: string, action: () => Promise<T>): Promise<T> {
-    const lockPath = join(this.paths(jobId).directory, '.update.lock');
-    const deadline = Date.now() + 5_000;
+    return this.withLease(join(this.paths(jobId).directory, '.update.lock'), action);
+  }
+
+  async withSchedulerLease<T>(action: () => Promise<T>): Promise<T> {
+    return this.withLease(join(this.stateRoot, '.scheduler.lock'), action);
+  }
+
+  private async readLease(path: string): Promise<LeaseOwner | undefined> {
+    try {
+      const metadata = await lstat(path);
+      if (!metadata.isFile() || metadata.isSymbolicLink()) return undefined;
+      const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+      try { return leaseOwnerSchema.parse(JSON.parse((await handle.readFile()).toString('utf8'))); }
+      finally { await handle.close(); }
+    } catch { return undefined; }
+  }
+
+  private async withLease<T>(path: string, action: () => Promise<T>): Promise<T> {
+    const owner = { ...this.leaseOwner, token: `${this.leaseOwner.token}:${randomBytes(8).toString('hex')}` };
+    const deadline = Date.now() + this.lockWaitMilliseconds;
     let handle;
     for (;;) {
       try {
-        handle = await open(lockPath, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY, 0o600);
-        await handle.writeFile(`${process.pid}\n`);
+        handle = await open(path, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
+        await handle.writeFile(JSON.stringify(owner));
         await handle.sync();
         break;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-        if (Date.now() >= deadline) throw new JobStoreError('internal-error', 'Stored job update lock is unavailable.');
+        const existing = await this.readLease(path);
+        if (existing && !(await this.leaseOwnerVerifier(existing))) {
+          const replacement = await this.readLease(path);
+          if (replacement?.token === existing.token) await unlink(path).catch(() => undefined);
+          continue;
+        }
+        if (Date.now() >= deadline) throw new JobStoreError('lock-unavailable', 'Private state lease is unavailable.');
         await new Promise<void>((resolve) => setTimeout(resolve, 2));
       }
     }
     try { return await action(); } finally {
       await handle.close();
-      await unlink(lockPath).catch(() => undefined);
+      const replacement = await this.readLease(path);
+      if (replacement?.token === owner.token) await unlink(path).catch(() => undefined);
     }
   }
 
@@ -336,24 +443,29 @@ export class JobStore {
     const current = await this.read(jobId);
     if (current.revision !== expectedRevision) throw new JobStoreError('stale-revision', 'Stored job revision changed.');
     assertMutable(current);
-    return this.commit({ ...current, runner: { ...current.runner, ...runner, heartbeat: this.clock.now().toISOString() } }, expectedRevision);
+    const control = await this.readControl(jobId);
+    return this.commit({ ...current, runner: { ...current.runner, ...runner, heartbeat: this.clock.now().toISOString() } }, expectedRevision, control.terminalIntent ?? undefined);
   }
 
   async updateProgress(jobId: string, expectedRevision: number, update: { sessionId?: string; progressTail?: string[]; rawByteCount?: number }): Promise<InternalJobRecord> {
     const current = await this.read(jobId);
     if (current.revision !== expectedRevision) throw new JobStoreError('stale-revision', 'Stored job revision changed.');
     assertMutable(current);
+    const control = await this.readControl(jobId);
     return this.commit({
       ...current,
       job: { ...current.job, updated_at: this.clock.now().toISOString(), ...(update.sessionId ? { claude_session_id: update.sessionId } : {}) },
       ...(update.progressTail ? { progressTail: update.progressTail.slice(-20) } : {}),
       ...(update.rawByteCount !== undefined ? { rawByteCount: update.rawByteCount } : {}),
-    }, expectedRevision);
+    }, expectedRevision, control.terminalIntent ?? undefined);
   }
 
   async readRequest(jobId: string): Promise<string> {
     try {
-      const parsed = JSON.parse(await readFile(this.paths(jobId).request, 'utf8')) as unknown;
+      const handle = await open(this.paths(jobId).request, constants.O_RDONLY | constants.O_NOFOLLOW);
+      let contents: string;
+      try { contents = (await handle.readFile()).toString('utf8'); } finally { await handle.close(); }
+      const parsed = JSON.parse(contents) as unknown;
       if (!parsed || typeof parsed !== 'object' || typeof (parsed as { prompt?: unknown }).prompt !== 'string') throw new Error();
       return (parsed as { prompt: string }).prompt;
     } catch {
@@ -362,11 +474,22 @@ export class JobStore {
   }
 
   async removeRequest(jobId: string): Promise<void> {
-    await rm(this.paths(jobId).request, { force: true });
+    const path = this.paths(jobId).request;
+    try {
+      const metadata = await lstat(path);
+      if (!metadata.isFile() || metadata.isSymbolicLink()) throw new JobStoreError('internal-error', 'Private request path is unsafe.');
+      await unlink(path);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
   }
 
   async readControl(jobId: string): Promise<z.infer<typeof ControlRecordSchema>> {
-    try { return ControlRecordSchema.parse(JSON.parse(await readFile(this.paths(jobId).control, 'utf8'))); }
+    try {
+      const handle = await open(this.paths(jobId).control, constants.O_RDONLY | constants.O_NOFOLLOW);
+      try { return ControlRecordSchema.parse(JSON.parse((await handle.readFile()).toString('utf8'))); }
+      finally { await handle.close(); }
+    }
     catch (error) {
       if (error instanceof JobStoreError) throw error;
       throw new JobStoreError('internal-error', 'Stored Claude control state is invalid.');
@@ -377,7 +500,7 @@ export class JobStore {
     const current = await this.read(jobId);
     if (!['queued', 'running'].includes(current.job.state)) return current;
     const control = await this.readControl(jobId);
-    if (!control.terminalIntent || control.revision <= current.revision) return undefined;
+    if (!control.terminalIntent) return undefined;
     try {
       return await this.publishTerminal(jobId, current.revision, {
         state: control.terminalIntent,
@@ -390,8 +513,27 @@ export class JobStore {
     }
   }
 
+  async requestTerminalIntent(jobId: string, expectedRevision: number, state: 'cancelled' | 'timed_out' | 'output_limited'): Promise<InternalJobRecord> {
+    return this.withJobLock(jobId, async () => {
+      const current = await this.read(jobId);
+      if (current.revision !== expectedRevision) throw new JobStoreError('stale-revision', 'Stored job revision changed.');
+      assertMutable(current);
+      const previous = await this.readControl(jobId);
+      if (previous.terminalIntent && previous.terminalIntent !== state) throw new JobStoreError('terminal-intent', 'A durable terminal intent already owns this job.');
+      await atomicWrite(this.paths(jobId).control, JSON.stringify({ schemaVersion: 1, revision: expectedRevision + 1, terminalIntent: state }));
+      return current;
+    });
+  }
+
+  async finalizeTerminalIntent(jobId: string): Promise<InternalJobRecord | undefined> {
+    return this.recoverTerminalIntent(jobId);
+  }
+
   async setTerminalIntent(jobId: string, expectedRevision: number, state: 'cancelled' | 'timed_out' | 'output_limited'): Promise<InternalJobRecord> {
-    return this.publishTerminal(jobId, expectedRevision, { state, result: Buffer.alloc(0), error: terminalError(state) });
+    await this.requestTerminalIntent(jobId, expectedRevision, state);
+    const finalized = await this.recoverTerminalIntent(jobId);
+    if (!finalized) throw new JobStoreError('internal-error', 'Durable terminal intent could not be finalized.');
+    return finalized;
   }
 
   async publishTerminal(jobId: string, expectedRevision: number, publication: TerminalPublication): Promise<InternalJobRecord> {
@@ -400,7 +542,7 @@ export class JobStore {
       if (current.revision !== expectedRevision) throw new JobStoreError('stale-revision', 'Stored job revision changed.');
       assertMutable(current);
       const pendingControl = await this.readControl(jobId);
-      if (pendingControl.terminalIntent && pendingControl.revision > current.revision
+      if (pendingControl.terminalIntent
         && pendingControl.terminalIntent !== publication.state) {
         throw new JobStoreError('terminal-intent', 'A durable terminal intent already owns this job.');
       }
@@ -443,14 +585,46 @@ export class JobStore {
 
   async remove(jobId: string): Promise<void> {
     const paths = this.paths(jobId);
-    try { await stat(paths.directory); } catch { throw new JobStoreError('job-not-found', 'Claude job was not found.'); }
+    try {
+      const metadata = await lstat(paths.directory);
+      if (!metadata.isDirectory() || metadata.isSymbolicLink()) throw new JobStoreError('internal-error', 'Private job directory is unsafe.');
+    } catch (error) {
+      if (error instanceof JobStoreError) throw error;
+      throw new JobStoreError('job-not-found', 'Claude job was not found.');
+    }
     await rm(paths.directory, { recursive: true });
+  }
+
+  private async cleanupCrashRemnants(): Promise<void> {
+    for (const name of await readdir(this.jobsRoot)) {
+      const staging = name.match(STAGING_PATTERN);
+      if (staging) {
+        const directory = join(this.jobsRoot, name);
+        try {
+          const metadata = await lstat(directory);
+          if (!metadata.isDirectory() || metadata.isSymbolicLink()) continue;
+          const ownerPath = join(directory, '.owner.json');
+          const handle = await open(ownerPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+          let owner: LeaseOwner;
+          try { owner = leaseOwnerSchema.parse(JSON.parse((await handle.readFile()).toString('utf8'))); }
+          finally { await handle.close(); }
+          if (!(await this.leaseOwnerVerifier(owner))) await rm(directory, { recursive: true });
+        } catch { /* invalid or unverifiable staging is retained fail-closed */ }
+        continue;
+      }
+      if (!JOB_ID_PATTERN.test(name)) continue;
+      try {
+        const record = await this.read(name);
+        if (!['queued', 'running'].includes(record.job.state)) await this.removeRequest(name);
+      } catch { /* corrupt entries are retained for diagnosis */ }
+    }
   }
 
   async verifyPrivateModes(): Promise<string[]> {
     const warnings: string[] = [];
     if (((await stat(this.stateRoot)).mode & 0o077) !== 0) warnings.push('state root permissions are not private; avoid Windows-mounted WSL paths');
     if (((await stat(this.jobsRoot)).mode & 0o077) !== 0) warnings.push('jobs root permissions are not private; avoid Windows-mounted WSL paths');
+    if (((await stat(this.cursorKeyPath)).mode & 0o077) !== 0) warnings.push('cursor key permissions are not private; avoid Windows-mounted WSL paths');
     return warnings;
   }
 }

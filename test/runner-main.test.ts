@@ -28,6 +28,24 @@ describe('detached runner entrypoint', () => {
     expect(execute).toHaveBeenCalledOnce();
   });
 
+  it('waits beyond the former fixed five-second attempt ceiling for acknowledged ownership', async () => {
+    const execute = vi.fn(async () => undefined);
+    let reads = 0;
+    const store = {
+      init: vi.fn(async () => undefined),
+      read: vi.fn(async () => {
+        reads += 1;
+        return reads <= 600
+          ? { job: { state: 'queued' }, runner: { token: 'token' } }
+          : { job: { state: 'running' }, runner: { token: 'token', pid: 321 } };
+      }),
+    };
+    expect(await runDetachedRunnerMain([
+      'node', 'runner', '--state-root', '/state', '--job-id', 'job_1', '--runner-token', 'token',
+    ], { processId: 321, storeFactory: () => store, execute, wait: async () => undefined })).toBe(0);
+    expect(reads).toBe(601);
+  });
+
   it('stops safely for a terminal job or exhausted readiness attempts', async () => {
     const terminalStore = { init: async () => undefined, read: async () => ({ job: { state: 'cancelled' }, runner: { token: 'token' } }) };
     expect(await runDetachedRunnerMain([
