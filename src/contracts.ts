@@ -14,12 +14,12 @@ export const ExecutionSchema = z.object({
   mode: z.enum(['auto', 'sync', 'async']).default('auto'),
   wait_seconds: z.number().int().min(0).max(45).default(45),
   timeout_seconds: z.number().int().min(30).max(7200).default(1800),
-});
+}).strict();
 export const SessionSchema = z.discriminatedUnion('mode', [
-  z.object({ mode: z.literal('new') }),
-  z.object({ mode: z.literal('resume'), session_id: explicitIdentifier }),
-  z.object({ mode: z.literal('cloud_create'), description: z.string().min(1).max(256).refine(hasNoControlCharacters).optional() }),
-  z.object({ mode: z.literal('cloud_attach'), target: explicitIdentifier }),
+  z.object({ mode: z.literal('new') }).strict(),
+  z.object({ mode: z.literal('resume'), session_id: explicitIdentifier }).strict(),
+  z.object({ mode: z.literal('cloud_create'), description: z.string().min(1).max(256).refine(hasNoControlCharacters).optional() }).strict(),
+  z.object({ mode: z.literal('cloud_attach'), target: explicitIdentifier }).strict(),
 ]);
 
 /** Public task input, before defaults have been applied. */
@@ -53,14 +53,47 @@ export const ClaudeErrorCodeSchema = z.enum([
   'timed-out', 'output-limited', 'orphaned', 'internal-error',
 ]);
 export type ClaudeErrorCode = z.infer<typeof ClaudeErrorCodeSchema>;
+export const ClaudeTerminalErrorSubtypeSchema = z.enum([
+  'error_during_execution', 'error_max_turns', 'error_max_budget_usd',
+  'error_max_structured_output_retries', 'error_invalid_request', 'error_api',
+  'error_rate_limit', 'error_auth',
+]);
+export type ClaudeTerminalErrorSubtype = z.infer<typeof ClaudeTerminalErrorSubtypeSchema>;
 export const ClaudeErrorSchema = z.object({
   code: ClaudeErrorCodeSchema,
   message: z.string().min(1).max(1024),
   retryable: z.boolean().optional(),
+  subtype: ClaudeTerminalErrorSubtypeSchema.optional(),
 }).strict();
 export type ClaudeError = z.infer<typeof ClaudeErrorSchema>;
 
-const UsageSchema = z.record(z.union([z.string(), z.number(), z.boolean(), z.null()]));
+const UsageShape = {
+  input_tokens: z.number().int().nonnegative().optional(),
+  output_tokens: z.number().int().nonnegative().optional(),
+  total_tokens: z.number().int().nonnegative().optional(),
+  reasoning_tokens: z.number().int().nonnegative().optional(),
+  cache_creation_input_tokens: z.number().int().nonnegative().optional(),
+  cache_read_input_tokens: z.number().int().nonnegative().optional(),
+  cache_creation_5m_input_tokens: z.number().int().nonnegative().optional(),
+  cache_creation_1h_input_tokens: z.number().int().nonnegative().optional(),
+  is_cache_hit: z.boolean().optional(),
+};
+/** Only aggregate numerical/boolean usage measurements are safe to expose downstream. */
+export const ClaudeUsageSchema = z.object(UsageShape).strict();
+export type ClaudeUsage = z.infer<typeof ClaudeUsageSchema>;
+
+export function sanitizeClaudeUsage(value: unknown): ClaudeUsage | undefined {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const safe: Record<string, number | boolean> = {};
+  for (const key of Object.keys(UsageShape) as Array<keyof typeof UsageShape>) {
+    if (!(key in record)) continue;
+    const parsed = UsageShape[key].safeParse(record[key]);
+    if (parsed.success && parsed.data !== undefined) safe[key] = parsed.data;
+  }
+  return Object.keys(safe).length === 0 ? undefined : ClaudeUsageSchema.parse(safe);
+}
+
 export const ClaudeJobSchema = z.object({
   id: z.string().min(1).max(128),
   state: JobStateSchema,
@@ -76,7 +109,7 @@ export const ClaudeJobSchema = z.object({
   claude_session_id: z.string().min(1).max(512).optional(),
   exit_code: z.number().int().nullable().optional(),
   signal: z.string().max(64).nullable().optional(),
-  usage: UsageSchema.optional(),
+  usage: ClaudeUsageSchema.optional(),
   total_cost_usd: z.number().finite().nonnegative().optional(),
   result_preview: z.string().max(4096).optional(),
   error: ClaudeErrorSchema.optional(),

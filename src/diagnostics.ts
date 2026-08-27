@@ -15,10 +15,10 @@ export function redactDiagnostic(value: string, options: DiagnosticOptions = {})
   let redacted = value;
   if (homeDirectory) redacted = redacted.replace(new RegExp(escapeRegExp(homeDirectory), 'g'), '~');
   return redacted
+    .replace(/\bAuthorization\s*:\s*[^\r\n]*/gi, 'Authorization: [redacted]')
     .replace(/\bsk-ant-(?:api\d+-)?[A-Za-z0-9_-]+\b/g, '[redacted]')
     .replace(/\b(Bearer)\s+[A-Za-z0-9._~+/-]+/gi, '$1 [redacted]')
-    .replace(/\b(Authorization)\s*:\s*(?:Bearer\s+)?[^\s,;]+/gi, '$1: [redacted]')
-    .replace(/\b(api[_-]?key|token|secret|password)\b\s*([:=])\s*[^\s,;]+/gi, '$1$2[redacted]')
+    .replace(/\b(API[_-]?KEY|TOKEN|SECRET|PASSWORD|[A-Za-z_][A-Za-z0-9_]*_(?:API[_-]?KEY|TOKEN|SECRET|PASSWORD))\b\s*([:=])\s*[^\s,;]+/gi, '$1$2[redacted]')
     .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, '[redacted-email]');
 }
 
@@ -28,8 +28,8 @@ export function safeErrorSummary(value: unknown, options: DiagnosticOptions = {}
   const code = ClaudeErrorCodeSchema.safeParse(record.code).success
     ? record.code as ClaudeError['code']
     : 'internal-error';
-  const message = typeof record.message === 'string'
+  const message = typeof record.message === 'string' && record.message.length > 0
     ? redactDiagnostic(record.message, options)
     : 'An internal error occurred.';
-  return { code, message };
+  return { code, message: message.slice(0, 1024) || 'An internal error occurred.' };
 }

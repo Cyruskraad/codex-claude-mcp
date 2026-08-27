@@ -1,4 +1,4 @@
-import type { ClaudeError, ClaudeErrorCode } from './contracts.js';
+import { sanitizeClaudeUsage, type ClaudeError, type ClaudeErrorCode, type ClaudeTerminalErrorSubtype, type ClaudeUsage } from './contracts.js';
 
 const MAX_PROGRESS_ITEMS = 20;
 const MAX_PROGRESS_TEXT_LENGTH = 1024;
@@ -18,7 +18,7 @@ export interface ClaudeStreamAccumulator {
   result?: string;
   terminal?: 'success' | 'error';
   error?: ClaudeError;
-  usage?: Record<string, string | number | boolean | null>;
+  usage?: ClaudeUsage;
   totalCostUsd?: number;
   durationMs?: number;
   numTurns?: number;
@@ -40,22 +40,46 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 }
 
-function safeUsage(value: unknown): Record<string, string | number | boolean | null> | undefined {
-  const record = asRecord(value);
-  if (!record) return undefined;
-  const entries = Object.entries(record).filter(([, item]) => (
-    item === null || ['string', 'number', 'boolean'].includes(typeof item)
-  ));
-  return entries.length === 0 ? undefined : Object.fromEntries(entries) as Record<string, string | number | boolean | null>;
-}
-
 function setSessionId(accumulator: ClaudeStreamAccumulator, value: unknown): void {
   if (typeof value === 'string' && value.length > 0 && value.length <= 512) accumulator.sessionId = value;
 }
 
-function terminalError(accumulator: ClaudeStreamAccumulator): void {
+interface TerminalErrorInfo {
+  code: ClaudeError['code'];
+  subtype: ClaudeTerminalErrorSubtype;
+}
+
+const RESULT_ERROR_TYPES: Record<ClaudeTerminalErrorSubtype, TerminalErrorInfo> = {
+  error_during_execution: { code: 'claude-failed', subtype: 'error_during_execution' },
+  error_max_turns: { code: 'output-limited', subtype: 'error_max_turns' },
+  error_max_budget_usd: { code: 'output-limited', subtype: 'error_max_budget_usd' },
+  error_max_structured_output_retries: { code: 'claude-failed', subtype: 'error_max_structured_output_retries' },
+  error_invalid_request: { code: 'claude-failed', subtype: 'error_invalid_request' },
+  error_api: { code: 'claude-failed', subtype: 'error_api' },
+  error_rate_limit: { code: 'claude-failed', subtype: 'error_rate_limit' },
+  error_auth: { code: 'auth-required', subtype: 'error_auth' },
+};
+
+const ERROR_EVENT_TYPES: Record<string, TerminalErrorInfo> = {
+  authentication_error: RESULT_ERROR_TYPES.error_auth,
+  authentication_required: RESULT_ERROR_TYPES.error_auth,
+  rate_limit_error: RESULT_ERROR_TYPES.error_rate_limit,
+  api_error: RESULT_ERROR_TYPES.error_api,
+  invalid_request_error: RESULT_ERROR_TYPES.error_invalid_request,
+};
+
+function knownResultError(value: unknown): TerminalErrorInfo | undefined {
+  return typeof value === 'string' ? RESULT_ERROR_TYPES[value as ClaudeTerminalErrorSubtype] : undefined;
+}
+
+function terminalError(accumulator: ClaudeStreamAccumulator, known?: TerminalErrorInfo): void {
+  if (accumulator.terminal) return;
   accumulator.terminal = 'error';
-  accumulator.error = { code: 'claude-failed', message: 'Claude execution failed.' };
+  accumulator.error = {
+    code: known?.code ?? 'claude-failed',
+    message: 'Claude execution failed.',
+    ...(known ? { subtype: known.subtype } : {}),
+  };
   delete accumulator.result;
 }
 
@@ -78,7 +102,7 @@ function handleStreamEvent(accumulator: ClaudeStreamAccumulator, event: Record<s
 
 function handleResult(accumulator: ClaudeStreamAccumulator, event: Record<string, unknown>): void {
   setSessionId(accumulator, event.session_id);
-  accumulator.usage = safeUsage(event.usage) ?? accumulator.usage;
+  accumulator.usage = sanitizeClaudeUsage(event.usage) ?? accumulator.usage;
   if (typeof event.total_cost_usd === 'number' && Number.isFinite(event.total_cost_usd)) accumulator.totalCostUsd = event.total_cost_usd;
   if (typeof event.duration_ms === 'number' && Number.isFinite(event.duration_ms)) accumulator.durationMs = event.duration_ms;
   if (typeof event.num_turns === 'number' && Number.isInteger(event.num_turns)) accumulator.numTurns = event.num_turns;
@@ -89,11 +113,13 @@ function handleResult(accumulator: ClaudeStreamAccumulator, event: Record<string
     delete accumulator.error;
     return;
   }
-  if (event.is_error === true || (typeof event.subtype === 'string' && event.subtype.startsWith('error'))) terminalError(accumulator);
+  const known = knownResultError(event.subtype);
+  if (known || event.is_error === true) terminalError(accumulator, known);
 }
 
 /** Adds one NDJSON line. Unknown well-formed event types are intentionally ignored. */
 export function ingestClaudeStreamLine(accumulator: ClaudeStreamAccumulator, line: string): void {
+  if (accumulator.terminal) return;
   if (line.trim() === '') return;
   let parsed: unknown;
   try {
@@ -122,7 +148,11 @@ export function ingestClaudeStreamLine(accumulator: ClaudeStreamAccumulator, lin
       handleResult(accumulator, event);
       break;
     case 'error':
-      terminalError(accumulator);
+      {
+        const nestedError = asRecord(event.error);
+        const subtype = event.subtype ?? nestedError?.type;
+        terminalError(accumulator, typeof subtype === 'string' ? ERROR_EVENT_TYPES[subtype] : undefined);
+      }
       break;
     default:
       break;

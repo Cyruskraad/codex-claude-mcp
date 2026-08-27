@@ -4,7 +4,7 @@ import { redactDiagnostic, safeErrorSummary } from '../src/diagnostics.js';
 describe('diagnostic sanitization', () => {
   it('redacts credentials, authorization identities, assignments, emails, and home prefixes', () => {
     const home = '/Users/synthetic-user';
-    const value = 'Authorization: Bearer synthetic-token API_KEY=synthetic-value password: synthetic-pass user@company.test /Users/synthetic-user/project';
+    const value = 'Bearer synthetic-token API_KEY=synthetic-value password: synthetic-pass user@company.test /Users/synthetic-user/project';
     const redacted = redactDiagnostic(value, { homeDirectory: home });
 
     expect(redacted).not.toContain('synthetic-token');
@@ -24,5 +24,22 @@ describe('diagnostic sanitization', () => {
     });
 
     expect(summary).toEqual({ code: 'claude-failed', message: 'Bearer [redacted] failed for [redacted-email]' });
+  });
+
+  it('redacts complete Authorization values for Basic, custom, and Bearer schemes plus prefixed secret assignments', () => {
+    for (const value of [
+      'Authorization: Basic synthetic-basic-value',
+      'Authorization: Custom synthetic-custom-value',
+      'Authorization: Bearer synthetic-bearer-value',
+      'ANTHROPIC_API_KEY=synthetic-api-value CUSTOM_PASSWORD:synthetic-password-value',
+    ]) {
+      const redacted = redactDiagnostic(value);
+      expect(redacted).not.toMatch(/synthetic-(basic|custom|bearer|api|password)-value/);
+    }
+  });
+
+  it('truncates an error-safe summary after redaction to the public error message bound', () => {
+    const summary = safeErrorSummary({ code: 'claude-failed', message: 'x'.repeat(2_000) });
+    expect(summary.message).toHaveLength(1024);
   });
 });

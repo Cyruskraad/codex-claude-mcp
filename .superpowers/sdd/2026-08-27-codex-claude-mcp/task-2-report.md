@@ -53,3 +53,52 @@ It exited nonzero with five expected suite-load failures, each `Cannot find modu
 ## Concerns
 
 None for Task 2. The Noodle smoke test requires a local loopback listener, so it needs the normal elevated sandbox permission in this environment. This task intentionally stops before the Task 3 process runner and Task 4 MCP registration layers.
+
+## Fix round 1 — security hardening
+
+### RED evidence
+
+After adding adversarial regression tests, the focused command was:
+
+```text
+npm test -- test/contracts.test.ts test/workspace-policy.test.ts test/stream-parser.test.ts test/diagnostics.test.ts
+```
+
+It exited nonzero with 12 expected behavioral failures across 45 tests:
+
+- arbitrary `prompt`, authorization, and identity usage fields were present in a stream snapshot and accepted by `ClaudeJobSchema`;
+- nested `execution` and all session branches stripped unsupported `continue` fields instead of rejecting them;
+- a fake `.git` directory and an injected Git-metadata result were accepted;
+- Basic/custom Authorization material and prefixed environment assignments were not fully redacted, and a 2,000-character error summary was not bounded;
+- error terminal state was overwritten by a later success, post-terminal progress was appended, and known subtypes were not retained safely.
+
+The initial real-Git test helper invoked `execFile` without its executable argument and failed before exercising Git; it was corrected to invoke `git` with argument arrays. The intended security failures remained reproducible.
+
+### Changes
+
+- Replaced open usage records with the exported strict `ClaudeUsageSchema` and `sanitizeClaudeUsage`. Only allowlisted aggregate integer/boolean fields are accepted; unknown, string, malformed, and sensitive fields are rejected for jobs and dropped from stream events.
+- Made `ExecutionSchema` and every discriminated session branch strict. Nested unsupported keys now produce validation errors.
+- Added an optional safe terminal-error subtype to the public error contract. Stream parsing has a strict known-subtype map, preserves no raw error values, makes the first terminal transition immutable, and ignores all post-terminal events.
+- Replaced filesystem Git-marker trust with `git rev-parse --is-inside-work-tree --is-inside-git-dir`, launched using an argument array and `shell:false`. The probe is injectable, fake/stale markers fail, real repositories and linked worktrees pass, and Git metadata directories are forbidden.
+- Authorization headers are redacted to end-of-line regardless of authentication scheme; prefixed `*_API_KEY`, `*_TOKEN`, `*_SECRET`, and `*_PASSWORD` assignments are redacted. Error-safe messages are redacted then capped at 1,024 characters.
+
+### GREEN and final validation
+
+| Command | Result |
+| --- | --- |
+| Focused `npm test -- test/contracts.test.ts test/workspace-policy.test.ts test/stream-parser.test.ts test/diagnostics.test.ts` | 4 files passed, 48 tests passed. |
+| `npm run test:coverage` | 6 files passed, 55 tests passed; 98.17% statements, 85.61% branches, 100% functions, 98.17% lines. All configured global thresholds passed. |
+| `npm run typecheck` | Passed. |
+| `npm run lint` | Passed. |
+| `npm test` | 6 files passed, 55 tests passed. |
+| `npm run build` | Passed; existing server and runner ESM bundles built. |
+| `npm run validate` | `{"ok":true,"data":{}}`. |
+| `npm run noodle:test` | Passed with normal loopback-listener permission and returned `{"ok":true,...}`. |
+
+### Regression self-review and compatibility
+
+- Usage is now one source of truth: strict persisted job schema and lossy stream sanitization share the same allowlist. No unsafe usage string has a public path.
+- The Git probe does not use a shell, does not expand arguments, and returns the requested nested canonical workspace rather than a repository root. Linked worktrees are proved through an actual `git worktree add` fixture.
+- Terminal state is first-write-wins. Known safe subtypes are additive optional data on `ClaudeError`; raw child error text is never kept.
+- Public compatibility is preserved for existing valid inputs and snapshots: `gitProbe` and error `subtype` are optional additions. The intentional breaking behavior is rejecting previously ignored nested keys and unsafe `ClaudeJob.usage` fields, as required by this security fix.
+- No production module imports the Noodle authoring-only entrypoint; no execution or MCP-registration behavior was added.
