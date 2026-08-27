@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { copyFile, mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { copyFile, mkdtemp, mkdir, readFile, rename, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
@@ -117,6 +117,20 @@ describe('delivery scripts', () => {
     ])).rejects.toMatchObject({ code: 1 });
   });
 
+  it('rejects documentation links that escape through a symlinked parent directory', async () => {
+    const fixture = await mkdtemp(join(tmpdir(), 'claude-bridge-doc-parent-symlink-'));
+    const root = join(fixture, 'repository');
+    const outside = join(fixture, 'outside');
+    await Promise.all([mkdir(join(root, 'docs'), { recursive: true }), mkdir(outside, { recursive: true })]);
+    await writeFile(join(outside, 'target.md'), '# Outside\n');
+    await symlink(outside, join(root, 'docs', 'escape'), 'dir');
+    await writeFile(join(root, 'README.md'), '[outside](docs/escape/target.md)\n');
+
+    await expect(execute(process.execPath, [
+      join(repositoryRoot, 'scripts/validate-docs.mjs'), '--root', root,
+    ])).rejects.toMatchObject({ code: 1 });
+  });
+
   it('creates a deterministic plugin-root archive and excludes undeclared files', async () => {
     const plugin = await makePluginFixture();
     const output = join(plugin, '..', 'release');
@@ -142,6 +156,33 @@ describe('delivery scripts', () => {
     expect(entries).toContain('codex-claude-mcp/dist/runner.mjs');
     expect(entries).not.toContain('codex-claude-mcp/dist/server.mjs.map');
     expect(entries.every((entry) => entry.startsWith('codex-claude-mcp/'))).toBe(true);
+  });
+
+  it('rejects a symlinked plugin root', async () => {
+    const plugin = await makePluginFixture();
+    const fixture = resolve(plugin, '..');
+    const rootAlias = join(fixture, 'plugin-alias');
+    await symlink(plugin, rootAlias, 'dir');
+    await expect(execute(process.execPath, [
+      join(repositoryRoot, 'scripts/package-release.mjs'),
+      '--plugin-root', rootAlias,
+      '--output-dir', join(fixture, 'root-alias-release'),
+      '--skip-sbom',
+    ])).rejects.toMatchObject({ code: 1 });
+  });
+
+  it('rejects a symlinked release-input parent directory', async () => {
+    const plugin = await makePluginFixture();
+    const fixture = resolve(plugin, '..');
+    const outsideAssets = join(fixture, 'outside-assets');
+    await rename(join(plugin, 'assets'), outsideAssets);
+    await symlink(outsideAssets, join(plugin, 'assets'), 'dir');
+    await expect(execute(process.execPath, [
+      join(repositoryRoot, 'scripts/package-release.mjs'),
+      '--plugin-root', plugin,
+      '--output-dir', join(fixture, 'parent-alias-release'),
+      '--skip-sbom',
+    ])).rejects.toMatchObject({ code: 1 });
   });
 
   it('validates the release contract and rejects source maps', async () => {
@@ -187,6 +228,42 @@ describe('delivery scripts', () => {
       expect(failure.stderr).toContain('unsafe.txt:1');
       expect(failure.stderr).not.toContain(secret);
     }
+  });
+
+  it.each([
+    ['Anthropic versioned key', ['sk', 'ant', 'api04', 'abcdefghijklmnopqrstuvwxyz123456'].join('-')],
+    ['Anthropic opaque key', ['sk', 'ant', 'abcdefghijklmnopqrstuvwxyz123456'].join('-')],
+    ['OpenAI project key', ['sk', 'proj', 'abcdefghijklmnopqrstuvwxyz123456'].join('-')],
+    ['GitHub fine-grained token', `${['github', 'pat'].join('_')}_abcdefghijklmnopqrstuvwxyz1234567890`],
+    ['GitHub OAuth token', `${['gho'].join('')}_abcdefghijklmnopqrstuvwxyz1234567890`],
+  ])('detects a fake-format %s without echoing it', async (_label, secret) => {
+    const root = await mkdtemp(join(tmpdir(), 'claude-bridge-secret-family-'));
+    await writeFile(join(root, 'unsafe.txt'), `credential=${secret}\n`);
+    try {
+      await execute(process.execPath, [join(repositoryRoot, 'scripts/scan-secrets.mjs'), '--root', root]);
+      throw new Error('scan unexpectedly passed');
+    } catch (error) {
+      const failure = error as { code?: number; stderr?: string };
+      expect(failure.code).toBe(1);
+      expect(failure.stderr).toContain('unsafe.txt:1');
+      expect(failure.stderr).not.toContain(secret);
+    }
+  });
+
+  it('accepts short token-like documentation placeholders', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'claude-bridge-secret-benign-'));
+    const placeholders = [
+      ['sk', 'ant', 'api03', 'short'].join('-'),
+      ['sk', 'proj', 'short'].join('-'),
+      `${['github', 'pat'].join('_')}_short`,
+      `${['gho'].join('')}_short`,
+    ];
+    await writeFile(join(root, 'safe.txt'), `${placeholders.join('\n')}\n`);
+    const { stdout, stderr } = await execute(process.execPath, [
+      join(repositoryRoot, 'scripts/scan-secrets.mjs'), '--root', root,
+    ]);
+    expect(stdout).toBe('Secret scan passed.\n');
+    expect(stderr).toBe('');
   });
 
   it('generates production-only dependency notices', async () => {

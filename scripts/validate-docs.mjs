@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import { lstat, readdir, readFile } from 'node:fs/promises';
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { lstat, readdir, readFile, realpath } from 'node:fs/promises';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import process from 'node:process';
 
 const EXCLUDED_DIRECTORIES = new Set([
@@ -10,6 +10,17 @@ const EXCLUDED_DIRECTORIES = new Set([
 function option(name, fallback) {
   const index = process.argv.indexOf(name);
   return index === -1 ? fallback : process.argv[index + 1];
+}
+
+function isContained(root, candidate) {
+  const fromRoot = relative(root, candidate);
+  return fromRoot === '' || (!isAbsolute(fromRoot) && fromRoot !== '..' && !fromRoot.startsWith(`..${sep}`));
+}
+
+async function trustedRoot(path) {
+  const metadata = await lstat(path);
+  if (!metadata.isDirectory() || metadata.isSymbolicLink()) throw new Error('Documentation root must be a real directory.');
+  return realpath(path);
 }
 
 async function markdownFiles(root, directory = root) {
@@ -35,19 +46,23 @@ function localTargets(markdown) {
 }
 
 async function main() {
-  const root = resolve(option('--root', process.cwd()));
+  const root = await trustedRoot(resolve(option('--root', process.cwd())));
   const files = (await markdownFiles(root)).sort();
   const failures = [];
   for (const file of files) {
     const markdown = await readFile(file, 'utf8');
     for (const target of localTargets(markdown)) {
       const candidate = isAbsolute(target) ? target : resolve(dirname(file), target);
-      const fromRoot = relative(root, candidate);
-      if (fromRoot.startsWith('..') || isAbsolute(fromRoot)) {
+      if (!isContained(root, candidate)) {
         failures.push(`${file}: link escapes documentation root: ${target}`);
         continue;
       }
       try {
+        const canonicalCandidate = await realpath(candidate);
+        if (!isContained(root, canonicalCandidate) || canonicalCandidate !== resolve(candidate)) {
+          failures.push(`${file}: link escapes documentation root: ${target}`);
+          continue;
+        }
         const metadata = await lstat(candidate);
         if (metadata.isSymbolicLink()) failures.push(`${file}: symlink target is not allowed: ${target}`);
       } catch {

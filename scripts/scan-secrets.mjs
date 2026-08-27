@@ -8,9 +8,9 @@ const EXCLUDED_DIRECTORIES = new Set([
 ]);
 const BINARY_EXTENSIONS = new Set(['.png', '.zip']);
 const PATTERNS = [
-  ['Anthropic API key', new RegExp(['sk', 'ant', '(?:api03)?', '[A-Za-z0-9_-]{20,}'].join('-'))],
-  ['OpenAI API key', new RegExp(['sk', '[A-Za-z0-9]{20,}'].join('-'))],
-  ['GitHub token', new RegExp(['ghp', '[A-Za-z0-9]{30,}'].join('_'))],
+  ['Anthropic API key', new RegExp(`${['sk', 'ant'].join('-')}-(?:api\\d+-)?[A-Za-z0-9_-]{20,}`)],
+  ['OpenAI API key', new RegExp(`${['sk'].join('')}-(?!ant-)[A-Za-z0-9_-]{20,}`)],
+  ['GitHub token', new RegExp(`(?:gh[pousr]_[A-Za-z0-9]{30,}|${['github', 'pat'].join('_')}_[A-Za-z0-9_]{20,})`)],
   ['private key', new RegExp(['BEGIN ', '(?:RSA |EC |OPENSSH )?', 'PRIVATE KEY'].join(''))],
 ];
 

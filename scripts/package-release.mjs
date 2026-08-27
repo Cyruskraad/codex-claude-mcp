@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { chmod, copyFile, lstat, mkdir, mkdtemp, readFile, rm, unlink, utimes, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, lstat, mkdir, mkdtemp, readFile, realpath, rm, unlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import process from 'node:process';
 
 const VERSION = '0.1.0';
@@ -48,19 +48,38 @@ async function removeIfPresent(path) {
   }
 }
 
+function isContained(root, candidate) {
+  const fromRoot = relative(root, candidate);
+  return fromRoot === '' || (!isAbsolute(fromRoot) && fromRoot !== '..' && !fromRoot.startsWith(`..${sep}`));
+}
+
+async function trustedPluginRoot(path) {
+  const metadata = await lstat(path);
+  if (!metadata.isDirectory() || metadata.isSymbolicLink()) throw new Error('Plugin root must be a real directory.');
+  return realpath(path);
+}
+
+async function releaseInput(pluginRoot, path) {
+  const expected = resolve(pluginRoot, path);
+  const canonical = await realpath(expected);
+  if (!isContained(pluginRoot, canonical) || canonical !== expected) {
+    throw new Error(`Release input must remain inside the real plugin root: ${path}`);
+  }
+  const metadata = await lstat(expected);
+  if (!metadata.isFile() || metadata.isSymbolicLink()) throw new Error(`Release input must be a regular file: ${path}`);
+  return expected;
+}
+
 async function main() {
   const repositoryRoot = resolve(import.meta.dirname, '..');
-  const pluginRoot = resolve(option('--plugin-root', join(repositoryRoot, 'plugins/codex-claude-mcp')));
+  const pluginRoot = await trustedPluginRoot(resolve(option('--plugin-root', join(repositoryRoot, 'plugins/codex-claude-mcp'))));
   const outputDirectory = resolve(option('--output-dir', join(repositoryRoot, 'release')));
   const skipSbom = process.argv.includes('--skip-sbom');
-  const manifest = JSON.parse(await readFile(join(pluginRoot, '.codex-plugin/plugin.json'), 'utf8'));
+  const inputs = new Map();
+  for (const path of PACKAGE_FILES) inputs.set(path, await releaseInput(pluginRoot, path));
+  const manifest = JSON.parse(await readFile(inputs.get('.codex-plugin/plugin.json'), 'utf8'));
   if (manifest.name !== 'codex-claude-mcp' || manifest.version !== VERSION) {
     throw new Error(`Plugin manifest must be codex-claude-mcp version ${VERSION}.`);
-  }
-  for (const path of PACKAGE_FILES) {
-    const source = join(pluginRoot, path);
-    const metadata = await lstat(source);
-    if (!metadata.isFile() || metadata.isSymbolicLink()) throw new Error(`Release input must be a regular file: ${path}`);
   }
 
   await mkdir(outputDirectory, { recursive: true });
@@ -73,7 +92,7 @@ async function main() {
     for (const path of PACKAGE_FILES) {
       const destination = join(archiveRoot, path);
       await mkdir(dirname(destination), { recursive: true });
-      await copyFile(join(pluginRoot, path), destination);
+      await copyFile(inputs.get(path), destination);
       await chmod(destination, 0o644);
       await utimes(destination, FIXED_TIME, FIXED_TIME);
     }

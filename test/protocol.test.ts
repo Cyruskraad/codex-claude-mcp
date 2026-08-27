@@ -224,7 +224,7 @@ describe('built MCP protocol', () => {
     const privateValues = [
       'person@example.test',
       '/Users/private-person',
-      'sk-ant-api03-private-secret',
+      ['sk', 'ant', 'api03', 'private-secret'].join('-'),
       'Bearer private.token.value',
       'BASIC dXNlcjpwYXNz',
     ];
