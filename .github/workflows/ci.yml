@@ -1,0 +1,103 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  runtime:
+    name: Node 20 / ${{ matrix.os }} (Linux is the WSL2 baseline)
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Set up Node.js 20.19
+        uses: actions/setup-node@1e60f620b9541d0c243d1c8ba921b344c50af8cc # v4.0.3
+        with:
+          node-version: 20.19.5
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run build
+      - run: git diff --exit-code -- plugins/codex-claude-mcp/dist
+      - run: node --check plugins/codex-claude-mcp/dist/server.mjs
+      - run: node --check plugins/codex-claude-mcp/dist/runner.mjs
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run test:coverage
+      - run: npm run validate:all
+      - run: npm run scan:secrets
+
+  noodle-offline:
+    name: Noodle offline authoring / Node 24
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Set up Node.js 24
+        uses: actions/setup-node@1e60f620b9541d0c243d1c8ba921b344c50af8cc # v4.0.3
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run validate
+      - run: npm run noodle:test
+
+  supply-chain:
+    name: Audit and release package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Set up Node.js 20.19
+        uses: actions/setup-node@1e60f620b9541d0c243d1c8ba921b344c50af8cc # v4.0.3
+        with:
+          node-version: 20.19.5
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm audit --audit-level=high
+      - run: npm audit --omit=dev --audit-level=high
+      - run: npm run build
+      - run: npm run notices
+      - run: git diff --exit-code -- plugins/codex-claude-mcp/THIRD_PARTY_NOTICES.md
+      - run: npm run release:package
+      - run: sha256sum -c codex-claude-mcp-v0.1.0.zip.sha256
+        working-directory: release
+      - run: unzip -t release/codex-claude-mcp-v0.1.0.zip
+      - name: Upload release candidates
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: codex-claude-mcp-v0.1.0
+          path: |
+            release/codex-claude-mcp-v0.1.0.zip
+            release/codex-claude-mcp-v0.1.0.zip.sha256
+            release/codex-claude-mcp-v0.1.0.cdx.json
+          if-no-files-found: error
+
+  gitleaks:
+    name: Gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out complete history
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Scan committed history
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

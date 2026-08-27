@@ -1,7 +1,7 @@
 {
   "name": "codex-claude-mcp",
   "version": "0.1.0",
-  "description": "Run permission-aware local Claude Code tasks from Codex.",
+  "description": "Run permission-aware local Claude Code tasks from Codex with explicit models, effort, sessions, and durable jobs.",
   "author": {
     "name": "Cyruskraad",
     "url": "https://github.com/Cyruskraad"
@@ -9,17 +9,26 @@
   "homepage": "https://github.com/Cyruskraad/codex-claude-mcp",
   "repository": "https://github.com/Cyruskraad/codex-claude-mcp",
   "license": "MIT",
-  "keywords": ["claude-code", "mcp", "local", "codex"],
+  "keywords": ["claude-code", "mcp", "coding", "local", "codex"],
   "skills": "./skills/",
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "Claude Code Bridge",
-    "shortDescription": "Use local Claude Code tasks from Codex.",
-    "longDescription": "A local-only MCP bridge for inspected and permission-aware Claude Code workspaces.",
+    "shortDescription": "Delegate permission-aware local tasks to Claude Code.",
+    "longDescription": "Run inspected or explicitly authorized write tasks through the local Claude Code CLI with model, effort, session, and durable job controls.",
     "developerName": "Cyruskraad",
     "category": "Developer Tools",
-    "capabilities": ["MCP", "Local execution"],
+    "capabilities": ["Local MCP", "Code inspection", "Permission-aware writes", "Asynchronous jobs"],
     "websiteURL": "https://github.com/Cyruskraad/codex-claude-mcp",
-    "defaultPrompt": ["Inspect this workspace with Claude Code."]
+    "privacyPolicyURL": "https://github.com/Cyruskraad/codex-claude-mcp/blob/main/docs/PRIVACY.md",
+    "defaultPrompt": [
+      "Ask Claude Code to inspect this repository.",
+      "Run an authorized Claude Code task asynchronously.",
+      "Continue an explicit Claude Code session."
+    ],
+    "brandColor": "#7C3AED",
+    "composerIcon": "./assets/composer-icon.png",
+    "logo": "./assets/logo.png",
+    "logoDark": "./assets/logo-dark.png"
   }
 }

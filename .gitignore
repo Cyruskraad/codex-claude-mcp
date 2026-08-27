@@ -2,6 +2,11 @@ node_modules/
 coverage/
 dist/
 plugins/codex-claude-mcp/dist/
+!plugins/codex-claude-mcp/dist/
+plugins/codex-claude-mcp/dist/*
+!plugins/codex-claude-mcp/dist/server.mjs
+!plugins/codex-claude-mcp/dist/runner.mjs
+release/
 .env
 .env.*
 !.env.example

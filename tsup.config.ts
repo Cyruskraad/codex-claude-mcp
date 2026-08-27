@@ -11,6 +11,6 @@ export default defineConfig({
   splitting: false,
   outExtension: () => ({ js: '.mjs' }),
   outDir: 'plugins/codex-claude-mcp/dist',
-  sourcemap: true,
+  sourcemap: false,
   target: 'node20',
 });

@@ -3,7 +3,16 @@
     "claude-code-bridge": {
       "command": "node",
       "args": ["./dist/server.mjs"],
-      "cwd": "."
+      "cwd": ".",
+      "env_vars": [
+        "ANTHROPIC_API_KEY",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "CODEX_CLAUDE_MCP_CLAUDE_PATH",
+        "CODEX_CLAUDE_MCP_STATE_DIR",
+        "HOME",
+        "PATH",
+        "XDG_STATE_HOME"
+      ]
     }
   }
 }
