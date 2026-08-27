@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { copyFile, mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
@@ -47,6 +47,51 @@ async function makePluginFixture(): Promise<string> {
 }
 
 describe('delivery scripts', () => {
+  it('pins the build-tool graph to a safe resolved esbuild version', async () => {
+    const { stdout, stderr } = await execute(process.execPath, [
+      join(repositoryRoot, 'scripts/validate-dependencies.mjs'), '--root', repositoryRoot,
+    ]);
+    expect(stdout).toBe('Dependency resolutions satisfy the release security policy.\n');
+    expect(stderr).toBe('');
+  });
+
+  it('generates byte-identical SBOMs with stable root metadata from differently named roots', async () => {
+    const fixture = await mkdtemp(join(tmpdir(), 'claude-bridge-sbom-'));
+    const roots = [join(fixture, 'alpha-repository'), join(fixture, 'renamed-clean-clone')];
+    const outputs = [join(fixture, 'first-output'), join(fixture, 'second-output')];
+    for (const root of roots) {
+      await mkdir(root, { recursive: true });
+      await copyFile(join(repositoryRoot, 'package.json'), join(root, 'package.json'));
+      await copyFile(join(repositoryRoot, 'package-lock.json'), join(root, 'package-lock.json'));
+    }
+
+    await Promise.all(roots.map((root, index) => execute(process.execPath, [
+      join(repositoryRoot, 'scripts/generate-sbom.mjs'), '--root', root, '--output-dir', outputs[index],
+    ])));
+    const files = await Promise.all(outputs.map((output) => readFile(
+      join(output, 'codex-claude-mcp-v0.1.0.cdx.json'), 'utf8',
+    )));
+    expect(files[1]).toBe(files[0]);
+
+    const sbom = JSON.parse(files[0]) as {
+      metadata: { component: {
+        name: string; version: string; description: string;
+        licenses: Array<{ license: { id: string } }>;
+        externalReferences: Array<{ type: string; url: string }>;
+      } };
+    };
+    expect(sbom.metadata.component).toMatchObject({
+      name: 'codex-claude-mcp',
+      version: '0.1.0',
+      description: 'A local Codex MCP bridge for permission-aware Claude Code tasks.',
+      licenses: [{ license: { id: 'MIT' } }],
+      externalReferences: [
+        { type: 'vcs', url: 'https://github.com/Cyruskraad/codex-claude-mcp.git' },
+        { type: 'website', url: 'https://github.com/Cyruskraad/codex-claude-mcp#readme' },
+      ],
+    });
+  });
+
   it('rejects broken relative links while accepting valid repository documentation', async () => {
     const root = await mkdtemp(join(tmpdir(), 'claude-bridge-docs-'));
     await writeFile(join(root, 'README.md'), '[missing](docs/MISSING.md)\n');

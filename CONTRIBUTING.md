@@ -13,6 +13,7 @@ npm run typecheck
 npm run lint
 npm run test:coverage
 npm run validate:all
+npm audit --omit=dev
 ```
 
 Follow RED–GREEN–REFACTOR for behavior changes. Use the fake Claude executable for automated tests; tests must not require credentials, network access, a paid model call, or a real Claude process. Preserve the stable error contract and add protocol-level coverage when a tool schema or result changes.
@@ -22,6 +23,8 @@ Security-sensitive changes should explicitly test path canonicalization, argumen
 ## Noodle boundary
 
 Noodle Seed is an offline authoring/validation aid only. Do not link, deploy, change hosted configuration, add hosted credentials, or package generated Noodle corpora. Production remains the bundled local stdio server under `plugins/codex-claude-mcp/`.
+
+Noodle's pinned authoring package may report advisories in dependencies bundled upstream. Keep the full audit visible as a diagnostic, but use the clean blocking production audit as the release gate. Do not add broad overrides or edit lockfile resolutions by hand; update the pinned Noodle package when an upstream safe bundle is available.
 
 ## Pull requests
 

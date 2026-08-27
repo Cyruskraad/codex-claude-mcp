@@ -69,8 +69,11 @@ jobs:
           node-version: 20.19.5
           cache: npm
       - run: npm ci --ignore-scripts
-      - run: npm audit --audit-level=high
-      - run: npm audit --omit=dev --audit-level=high
+      - name: Block on production dependency advisories
+        run: npm audit --omit=dev --audit-level=high
+      - name: Report upstream Noodle authoring advisories (non-production diagnostic)
+        continue-on-error: true
+        run: npm audit --audit-level=high
       - run: npm run build
       - run: npm run notices
       - run: git diff --exit-code -- plugins/codex-claude-mcp/THIRD_PARTY_NOTICES.md

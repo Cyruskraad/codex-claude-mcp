@@ -3,6 +3,16 @@
   "version": "0.1.0",
   "private": true,
   "description": "A local Codex MCP bridge for permission-aware Claude Code tasks.",
+  "license": "MIT",
+  "author": {
+    "name": "Cyruskraad",
+    "url": "https://github.com/Cyruskraad"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Cyruskraad/codex-claude-mcp.git"
+  },
+  "homepage": "https://github.com/Cyruskraad/codex-claude-mcp#readme",
   "type": "module",
   "engines": {
     "node": ">=20.19.0"
@@ -19,9 +29,10 @@
     "noodle:test": "noodle test --json",
     "validate:assets": "node scripts/validate-assets.mjs",
     "validate:docs": "node scripts/validate-docs.mjs",
+    "validate:dependencies": "node scripts/validate-dependencies.mjs",
     "validate:plugin": "node scripts/validate-delivery.mjs",
     "validate:skill": "node scripts/validate-skill.mjs",
-    "validate:all": "npm run validate:plugin && npm run validate:skill && npm run validate:assets && npm run validate:docs",
+    "validate:all": "npm run validate:plugin && npm run validate:skill && npm run validate:assets && npm run validate:docs && npm run validate:dependencies",
     "scan:secrets": "node scripts/scan-secrets.mjs",
     "notices": "node scripts/generate-notices.mjs",
     "release:sbom": "node scripts/generate-sbom.mjs",
@@ -37,9 +48,15 @@
     "@types/node": "^22.15.0",
     "@vitest/coverage-v8": "^3.1.2",
     "eslint": "^9.26.0",
+    "esbuild": "0.28.2",
     "tsup": "^8.4.0",
     "typescript": "^5.8.3",
     "typescript-eslint": "^8.32.0",
     "vitest": "^3.1.2"
+  },
+  "overrides": {
+    "tsup": {
+      "esbuild": "0.28.2"
+    }
   }
 }

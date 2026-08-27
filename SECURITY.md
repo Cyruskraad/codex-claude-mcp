@@ -15,3 +15,7 @@ Include the affected version, platform, impact, minimal reproduction, and sugges
 Claude Code Bridge is a permission-aware local process wrapper, not an OS sandbox. Its controls include canonical workspace validation, Git-only write targets, shell-free spawning, stdin prompt transport, strict empty nested-MCP configuration, Chrome disablement, normal Claude permissions, private durable state, output caps, process ownership checks, and bounded redacted diagnostics.
 
 The bridge cannot protect against every behavior of the local Claude Code executable, the operating system, a malicious repository, or the configured model provider. Use OS isolation for untrusted content and review write-mode changes before committing or pushing.
+
+## Dependency audit boundary
+
+The release gate is `npm audit --omit=dev`: the installed plugin contains only the bundled bridge and its production notices, not its build and authoring toolchain. `@noodleseed/one` is pinned as an offline authoring/validation tool and currently bundles upstream dependencies that npm overrides cannot replace. A full development audit therefore remains a visible, nonblocking CI diagnostic until Noodle publishes a safe bundle; it is never treated as evidence that the production plugin is vulnerable or clean. The production audit remains blocking, and contributors must not suppress, hand-edit, or broadly override audit findings.
