@@ -9,6 +9,11 @@ import { describe, expect, it } from 'vitest';
 const repositoryRoot = resolve(import.meta.dirname, '..');
 const serverBundle = join(repositoryRoot, 'plugins/codex-claude-mcp/dist/server.mjs');
 const fakeClaude = join(repositoryRoot, 'test/fixtures/fake-claude.mjs');
+const helpWithoutMaxTurns = [
+  '-p, --print', '--input-format stream-json', '--output-format stream-json', '--verbose',
+  '--no-chrome', '--tools', '--permission-mode', '--model', '--effort', '--resume', '--cloud',
+  '--name', '--mcp-config', '--strict-mcp-config', '--disallowedTools',
+].join('\n');
 type ProtocolSchema = Record<string, unknown> & {
   properties: Record<string, ProtocolSchema>;
   anyOf: ProtocolSchema[];
@@ -250,6 +255,21 @@ describe('built MCP protocol', () => {
     }, {
       CODEX_CLAUDE_MCP_CLAUDE_PATH: fakeClaude,
       FAKE_AUTH_OUTPUT: `${privateValues.join('\n')}\n`,
+    });
+  });
+
+  it('uses a bounded parser-only fallback when the built CLI help omits max-turns', async () => {
+    await withProtocolClient(async (client) => {
+      const result = await client.callTool({ name: 'claude_health', arguments: {} });
+      expect(result.structuredContent).toMatchObject({
+        status: 'ready', features: { max_turns: true }, issues: [],
+      });
+      expect(JSON.stringify(result)).not.toContain('private parser diagnostic');
+    }, {
+      CODEX_CLAUDE_MCP_CLAUDE_PATH: fakeClaude,
+      FAKE_CLAUDE_HELP: helpWithoutMaxTurns,
+      FAKE_MAX_TURNS_PROBE_SCENARIO: 'recognized',
+      FAKE_MAX_TURNS_PROBE_OUTPUT: 'private parser diagnostic',
     });
   });
 

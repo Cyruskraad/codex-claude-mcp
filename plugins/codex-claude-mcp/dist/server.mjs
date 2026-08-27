@@ -18928,6 +18928,14 @@ function parseFeatures(help) {
     disable_nested_mcp: includesFlag(help, "--disallowedTools")
   };
 }
+function confirmsMaxTurns(probe) {
+  if (!probe.spawned || probe.timedOut || probe.outputLimited || probe.code === null || probe.code === 0 || probe.signal !== null) {
+    return false;
+  }
+  const unknownMaxTurns = /(?:unknown|unrecognized)\s+(?:option|argument)[^\n]{0,40}--max-turns|--max-turns[^\n]{0,40}(?:unknown|unrecognized)\s+(?:option|argument)/i;
+  if (unknownMaxTurns.test(probe.output)) return false;
+  return /\binput\s+must\s+be\s+provided\s+either\s+through\s+stdin\s+or\s+as\s+a\s+positional\s+argument\s+when\s+using\s+--print\b/i.test(probe.output);
+}
 function authStatus(probe) {
   if (probe.timedOut || probe.outputLimited) return { status: "timeout", ready: false };
   if (probe.code === 0) return { status: "ready", ready: true };
@@ -18988,6 +18996,18 @@ async function probeClaudeHealth(options = {}) {
     else if (helpProbe.code !== 0) issues.push("required_feature_missing");
     else {
       features = parseFeatures(helpProbe.output);
+      if (!features.max_turns) {
+        const maxTurnsProbe = await runProbe(
+          discovery.path,
+          ["-p", "--max-turns", "0"],
+          timeouts.maxTurns ?? 2e3,
+          4096,
+          grace,
+          environment
+        );
+        features.max_turns = confirmsMaxTurns(maxTurnsProbe);
+        if (maxTurnsProbe.timedOut || maxTurnsProbe.outputLimited) issues.push("probe_timeout");
+      }
       if (Object.values(features).some((supported) => !supported)) issues.push("required_feature_missing");
     }
     const authProbe = await runProbe(discovery.path, ["auth", "status"], timeouts.auth ?? 3e3, 16384, grace, environment);

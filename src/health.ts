@@ -17,7 +17,7 @@ export interface ClaudeHealthOptions {
   homeDirectory?: string;
   now?: () => Date;
   bridgeCounts?: () => Promise<{ runningJobs: number; queuedJobs: number }>;
-  timeouts?: { version?: number; help?: number; auth?: number; killGrace?: number };
+  timeouts?: { version?: number; help?: number; maxTurns?: number; auth?: number; killGrace?: number };
 }
 
 const emptyFeatures = (): FeatureSet => ({
@@ -86,6 +86,16 @@ function parseFeatures(help: string): FeatureSet {
   };
 }
 
+function confirmsMaxTurns(probe: ProbeResult): boolean {
+  if (!probe.spawned || probe.timedOut || probe.outputLimited || probe.code === null || probe.code === 0 || probe.signal !== null) {
+    return false;
+  }
+  const unknownMaxTurns = /(?:unknown|unrecognized)\s+(?:option|argument)[^\n]{0,40}--max-turns|--max-turns[^\n]{0,40}(?:unknown|unrecognized)\s+(?:option|argument)/i;
+  if (unknownMaxTurns.test(probe.output)) return false;
+  return /\binput\s+must\s+be\s+provided\s+either\s+through\s+stdin\s+or\s+as\s+a\s+positional\s+argument\s+when\s+using\s+--print\b/i
+    .test(probe.output);
+}
+
 function authStatus(probe: ProbeResult): ClaudeHealth['authentication'] {
   if (probe.timedOut || probe.outputLimited) return { status: 'timeout', ready: false };
   if (probe.code === 0) return { status: 'ready', ready: true };
@@ -142,6 +152,18 @@ export async function probeClaudeHealth(options: ClaudeHealthOptions = {}): Prom
     else if (helpProbe.code !== 0) issues.push('required_feature_missing');
     else {
       features = parseFeatures(helpProbe.output);
+      if (!features.max_turns) {
+        const maxTurnsProbe = await runProbe(
+          discovery.path,
+          ['-p', '--max-turns', '0'],
+          timeouts.maxTurns ?? 2_000,
+          4_096,
+          grace,
+          environment,
+        );
+        features.max_turns = confirmsMaxTurns(maxTurnsProbe);
+        if (maxTurnsProbe.timedOut || maxTurnsProbe.outputLimited) issues.push('probe_timeout');
+      }
       if (Object.values(features).some((supported) => !supported)) issues.push('required_feature_missing');
     }
     const authProbe = await runProbe(discovery.path, ['auth', 'status'], timeouts.auth ?? 3_000, 16_384, grace, environment);

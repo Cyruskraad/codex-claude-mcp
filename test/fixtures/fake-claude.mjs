@@ -46,6 +46,48 @@ if (process.argv.includes('--help')) {
   process.exit(Number(process.env.FAKE_HELP_EXIT ?? 0));
 }
 
+if (JSON.stringify(process.argv.slice(2)) === JSON.stringify(['-p', '--max-turns', '0'])) {
+  const probeScenario = process.env.FAKE_MAX_TURNS_PROBE_SCENARIO ?? 'recognized';
+  if (probeScenario === 'hang') {
+    process.on('SIGTERM', () => undefined);
+    setInterval(() => undefined, 1_000);
+    await new Promise(() => undefined);
+  }
+  if (probeScenario === 'flood') {
+    await new Promise((resolveWrite) => process.stderr.write(Buffer.alloc(4_097, 109), resolveWrite));
+    process.exit(1);
+  }
+  let stdin = '';
+  for await (const chunk of process.stdin) stdin += chunk.toString('utf8');
+  if (process.env.FAKE_MAX_TURNS_PROBE_RECORD) {
+    await writeFile(
+      process.env.FAKE_MAX_TURNS_PROBE_RECORD,
+      JSON.stringify({ argv: process.argv.slice(2), stdin }),
+      { mode: 0o600 },
+    );
+  }
+  const supplementalOutput = process.env.FAKE_MAX_TURNS_PROBE_OUTPUT ?? '';
+  if (probeScenario === 'signal-after-recognized') {
+    process.stderr.write('Error: Input must be provided either through stdin or as a positional argument when using --print.', () => {
+      process.kill(process.pid, 'SIGTERM');
+    });
+    await new Promise(() => undefined);
+  }
+  const outcomes = {
+    recognized: [1, 'Error: Input must be provided either through stdin or as a positional argument when using --print.'],
+    unknown: [1, "error: unknown option '--max-turns'"],
+    uncertain: [7, 'Unexpected parser failure.'],
+    authentication: [1, 'Authentication required.'],
+    network: [1, 'Network request failed.'],
+    'exit-zero': [0, ''],
+    'bare-missing-input': [1, 'Error: Input must be provided.'],
+    mixed: [1, "error: unknown option '--max-turns'\nError: Input must be provided either through stdin or as a positional argument when using --print."],
+  };
+  const [exitCode, output] = outcomes[probeScenario] ?? outcomes.uncertain;
+  process.stderr.write(`${output}${supplementalOutput ? `\n${supplementalOutput}` : ''}`);
+  process.exit(exitCode);
+}
+
 if (process.argv[2] === 'auth' && process.argv[3] === 'status') {
   if (process.env.FAKE_AUTH_SCENARIO === 'hang') {
     process.on('SIGTERM', () => undefined);

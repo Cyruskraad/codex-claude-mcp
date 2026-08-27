@@ -1,4 +1,4 @@
-import { chmod, copyFile, mkdir, mkdtemp, realpath, symlink, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, mkdtemp, readFile, realpath, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -11,8 +11,90 @@ const completeEnvironment = (overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessE
   CODEX_CLAUDE_MCP_CLAUDE_PATH: fakeClaude,
   ...overrides,
 });
+const helpWithoutMaxTurns = [
+  '-p, --print', '--input-format stream-json', '--output-format stream-json', '--verbose',
+  '--no-chrome', '--tools', '--permission-mode', '--model', '--effort', '--resume', '--cloud',
+  '--name', '--mcp-config', '--strict-mcp-config', '--disallowedTools',
+].join('\n');
 
 describe('Claude health probe', () => {
+  it('confirms max-turns with a prompt-free parser probe when current help omits it', async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'codex-claude-health-max-turns-')));
+    const record = join(root, 'probe.json');
+    const health = await probeClaudeHealth({
+      environment: completeEnvironment({
+        FAKE_CLAUDE_HELP: helpWithoutMaxTurns,
+        FAKE_MAX_TURNS_PROBE_SCENARIO: 'recognized',
+        FAKE_MAX_TURNS_PROBE_RECORD: record,
+      }),
+    });
+
+    expect(health).toMatchObject({
+      status: 'ready', features: { max_turns: true }, issues: [],
+    });
+    expect(JSON.parse(await readFile(record, 'utf8'))).toEqual({
+      argv: ['-p', '--max-turns', '0'], stdin: '',
+    });
+  });
+
+  it.each([
+    ['an unknown option response', 'unknown'],
+    ['an ambiguous failure', 'uncertain'],
+    ['an authentication failure', 'authentication'],
+    ['a network failure', 'network'],
+    ['an unexpected zero exit', 'exit-zero'],
+    ['a signalled process after recognized-looking text', 'signal-after-recognized'],
+    ['a generic missing-input response', 'bare-missing-input'],
+    ['mixed unknown-option and recognized-looking text', 'mixed'],
+  ] as const)('keeps max-turns unsupported after %s', async (_name, scenario) => {
+    const health = await probeClaudeHealth({
+      environment: completeEnvironment({
+        FAKE_CLAUDE_HELP: helpWithoutMaxTurns,
+        FAKE_MAX_TURNS_PROBE_SCENARIO: scenario,
+        FAKE_MAX_TURNS_PROBE_OUTPUT: 'private parser diagnostic person@example.test',
+      }),
+    });
+
+    expect(health.status).toBe('degraded');
+    expect(health.features.max_turns).toBe(false);
+    expect(health.issues).toContain('required_feature_missing');
+    expect(JSON.stringify(health)).not.toMatch(/private|person@example/i);
+  });
+
+  it('does not run the parser fallback when help already advertises max-turns', async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'codex-claude-health-no-max-probe-')));
+    const record = join(root, 'unexpected-probe.json');
+    const health = await probeClaudeHealth({
+      environment: completeEnvironment({
+        FAKE_MAX_TURNS_PROBE_SCENARIO: 'recognized',
+        FAKE_MAX_TURNS_PROBE_RECORD: record,
+      }),
+    });
+
+    expect(health).toMatchObject({ status: 'ready', features: { max_turns: true }, issues: [] });
+    await expect(readFile(record, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it.each([
+    ['a timed-out max-turns parser probe', 'hang'],
+    ['a byte-limited max-turns parser probe', 'flood'],
+  ] as const)('bounds and conservatively rejects %s', async (_name, scenario) => {
+    const started = Date.now();
+    const health = await probeClaudeHealth({
+      environment: completeEnvironment({
+        FAKE_CLAUDE_HELP: helpWithoutMaxTurns,
+        FAKE_MAX_TURNS_PROBE_SCENARIO: scenario,
+      }),
+      timeouts: { maxTurns: 250, killGrace: 20 },
+    });
+
+    expect(health.status).toBe('degraded');
+    expect(health.features.max_turns).toBe(false);
+    expect(health.issues).toContain('probe_timeout');
+    expect(health.issues).toContain('required_feature_missing');
+    expect(Date.now() - started).toBeLessThan(1_500);
+  });
+
   it('passes only the injected probe environment and gives exit zero precedence over sensitive auth prose', async () => {
     const injected = await probeClaudeHealth({
       environment: completeEnvironment({
