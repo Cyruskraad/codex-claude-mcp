@@ -55,6 +55,74 @@ describe('delivery scripts', () => {
     expect(stderr).toBe('');
   });
 
+  it('rejects an unreviewed GitHub Actions commit pin', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'claude-bridge-action-pins-'));
+    await Promise.all([
+      copyFile(join(repositoryRoot, 'package.json'), join(root, 'package.json')),
+      copyFile(join(repositoryRoot, 'package-lock.json'), join(root, 'package-lock.json')),
+      mkdir(join(root, '.github', 'workflows'), { recursive: true }),
+    ]);
+    const workflow = await readFile(join(repositoryRoot, '.github', 'workflows', 'ci.yml'), 'utf8');
+    await writeFile(
+      join(root, '.github', 'workflows', 'ci.yml'),
+      workflow.replaceAll(
+        'actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020',
+        'actions/setup-node@0000000000000000000000000000000000000000',
+      ),
+    );
+
+    await expect(execute(process.execPath, [
+      join(repositoryRoot, 'scripts/validate-dependencies.mjs'), '--root', root,
+    ])).rejects.toMatchObject({ code: 1 });
+  });
+
+  it('rejects an unreviewed shorthand GitHub Action', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'claude-bridge-action-shorthand-'));
+    await Promise.all([
+      copyFile(join(repositoryRoot, 'package.json'), join(root, 'package.json')),
+      copyFile(join(repositoryRoot, 'package-lock.json'), join(root, 'package-lock.json')),
+      mkdir(join(root, '.github', 'workflows'), { recursive: true }),
+    ]);
+    const workflow = await readFile(join(repositoryRoot, '.github', 'workflows', 'ci.yml'), 'utf8');
+    await writeFile(
+      join(root, '.github', 'workflows', 'ci.yml'),
+      `${workflow}\n- uses: unreviewed/action@v1\n`,
+    );
+
+    await expect(execute(process.execPath, [
+      join(repositoryRoot, 'scripts/validate-dependencies.mjs'), '--root', root,
+    ])).rejects.toMatchObject({
+      code: 1,
+      stderr: expect.stringContaining('The CI workflow uses unreviewed action unreviewed/action.'),
+    });
+  });
+
+  it('rejects an unreviewed action in a second workflow', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'claude-bridge-secondary-workflow-'));
+    await Promise.all([
+      copyFile(join(repositoryRoot, 'package.json'), join(root, 'package.json')),
+      copyFile(join(repositoryRoot, 'package-lock.json'), join(root, 'package-lock.json')),
+      mkdir(join(root, '.github', 'workflows'), { recursive: true }),
+    ]);
+    await Promise.all([
+      copyFile(
+        join(repositoryRoot, '.github', 'workflows', 'ci.yml'),
+        join(root, '.github', 'workflows', 'ci.yml'),
+      ),
+      writeFile(
+        join(root, '.github', 'workflows', 'secondary.yaml'),
+        'jobs:\n  review:\n    steps:\n      - uses: unreviewed/action@v1\n',
+      ),
+    ]);
+
+    await expect(execute(process.execPath, [
+      join(repositoryRoot, 'scripts/validate-dependencies.mjs'), '--root', root,
+    ])).rejects.toMatchObject({
+      code: 1,
+      stderr: expect.stringContaining('The CI workflow uses unreviewed action unreviewed/action.'),
+    });
+  });
+
   it('generates byte-identical SBOMs with stable root metadata from differently named roots', async () => {
     const fixture = await mkdtemp(join(tmpdir(), 'claude-bridge-sbom-'));
     const roots = [join(fixture, 'alpha-repository'), join(fixture, 'renamed-clean-clone')];
