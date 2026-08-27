@@ -120,3 +120,32 @@ Built `plugins/codex-claude-mcp/dist/server.mjs` is exercised through SDK `Clien
 - Plugin Creator validator: passed.
 
 No real Claude model task, authentication, network call, deployment, publication, or repository mutation outside this local Task 4 fix was performed.
+
+## Review fix round 2 — canonical bundle entrypoints
+
+### RED evidence
+
+- The Task 5 clean-ZIP smoke exposed that Node canonicalized an ESM bundle loaded through a directory symlink while `process.argv[1]` retained the alias. The server's lexical URL/path comparison therefore returned false and the executable silently exited without starting stdio MCP.
+- After strengthening `test/bundle-artifact.test.ts`, `npm run build && npx vitest run test/bundle-artifact.test.ts` failed **1/4**: the copied server invoked through a symlink alias rejected MCP initialization with `-32000 Connection closed`. The aliased runner evidence already reached its argument validation and returned code 2.
+- A focused unit RED also failed to load the not-yet-created shared canonical-entrypoint helper.
+
+### Fix
+
+- Added `src/entrypoint.ts` with one synchronous, exception-safe physical-file predicate. It resolves the invoked argument, converts the module URL, canonicalizes both with `realpathSync.native`, and returns false on any missing/malformed input without logging or returning raw paths.
+- `src/server.ts` now guards stdio startup with the canonical predicate, so macOS aliases such as `/var/...` and `/private/var/...`, extracted ZIP paths, and ordinary symlinks initialize the same executable.
+- `src/runner.ts` uses the same canonical guard before honoring runner arguments. This preserves intended direct execution through aliases while preventing an imported runner module from accidentally acting on a host process's `--job-id` arguments.
+- The standalone artifact suite now proves actual MCP initialize metadata from an aliased copied server, not merely exit code 0, and proves the aliased copied runner reaches its main argument contract.
+
+### Fresh verification after round 2
+
+- Canonical-entrypoint unit tests: **2/2 passed**.
+- Standalone copied-bundle artifact tests: **4/4 passed**.
+- `npm run test:bundle`: **26/26 passed**, including all 22 built MCP protocol cases.
+- `npm test`: **200/200 passed** across 19 files.
+- `npm run test:coverage`: **200/200 passed**; statements/lines **95.15%**, functions **92.85%**, branches **86.44%**. `src/entrypoint.ts` is **100%** covered for statements, lines, functions, and branches.
+- `npm run typecheck`: passed.
+- `npm run lint`: passed.
+- `npm run build`: passed; server and runner remained independently self-contained.
+- `node --check` for both production bundles: passed.
+
+No Task 5 delivery, documentation, manifest, asset, skill, or release-script file was edited by this fix. No network, authentication, live Claude task, deployment, or publication action was performed.

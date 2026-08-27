@@ -2,6 +2,7 @@ export const RUNNER_ENTRYPOINT = 'codex-claude-mcp-runner';
 
 import { JobStore } from './job-store.js';
 import { executeRunner } from './runner-engine.js';
+import { isCanonicalEntrypoint } from './entrypoint.js';
 
 function argument(argv: string[], name: string): string | undefined {
   const index = argv.indexOf(name);
@@ -43,7 +44,7 @@ export async function runDetachedRunnerMain(argv: string[], dependencies: Runner
   return 3;
 }
 
-if (process.argv.includes('--job-id')) {
+if (isCanonicalEntrypoint(import.meta.url, process.argv[1]) && process.argv.includes('--job-id')) {
   void runDetachedRunnerMain(process.argv)
     .then((code) => { process.exitCode = code; })
     .catch(() => { process.exitCode = 1; });

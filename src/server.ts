@@ -1,9 +1,8 @@
-import { fileURLToPath, pathToFileURL } from 'node:url';
-import { resolve } from 'node:path';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { Transport, TransportSendOptions } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type { JSONRPCMessage, MessageExtraInfo } from '@modelcontextprotocol/sdk/types.js';
+import { isCanonicalEntrypoint } from './entrypoint.js';
 import { JobService } from './job-service.js';
 import { probeClaudeHealth } from './health.js';
 import { createClaudeMcpServer, type ClaudeHealth, type ProtocolJobService } from './protocol.js';
@@ -90,9 +89,6 @@ export async function runClaudeMcpStdio(options: ClaudeMcpStdioOptions = {}): Pr
   return server;
 }
 
-const isEntrypoint = process.argv[1]
-  ? pathToFileURL(resolve(process.argv[1])).href === pathToFileURL(resolve(fileURLToPath(import.meta.url))).href
-  : false;
-if (isEntrypoint) {
+if (isCanonicalEntrypoint(import.meta.url, process.argv[1])) {
   void runClaudeMcpStdio().catch(() => { process.exitCode = 1; });
 }
