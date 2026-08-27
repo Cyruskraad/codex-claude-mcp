@@ -1,8 +1,12 @@
 import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { readFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import {
+  chmod, link, lstat, mkdir, open, readFile, unlink,
+} from 'node:fs/promises';
 import { platform } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import {
@@ -23,7 +27,10 @@ export interface JobResultPage extends JobStatusView { result: string; next_curs
 
 export interface RunnerLaunchRequest { stateRoot: string; jobId: string; runnerToken: string }
 export interface RunnerLaunchResult { pid: number; birthIdentity?: string }
-export interface RunnerLauncher { launch(request: RunnerLaunchRequest): Promise<RunnerLaunchResult> }
+export interface RunnerLauncher {
+  prepare?(stateRoot: string): Promise<void>;
+  launch(request: RunnerLaunchRequest): Promise<RunnerLaunchResult>;
+}
 export type OwnershipVerifier = (record: InternalJobRecord) => Promise<boolean>;
 
 export interface JobServiceOptions {
@@ -82,12 +89,69 @@ export async function verifyRunnerOwnership(record: InternalJobRecord, inspector
 }
 
 class DetachedRunnerLauncher implements RunnerLauncher {
+  private stableRunnerPath?: string;
   constructor(private readonly inspector: ProcessIdentityInspector) {}
+
+  async prepare(stateRoot: string): Promise<void> {
+    if (this.stableRunnerPath) return;
+    const sourcePath = fileURLToPath(new URL('./runner.mjs', import.meta.url));
+    let sourceHandle;
+    try {
+      sourceHandle = await open(sourcePath, constants.O_RDONLY | constants.O_NOFOLLOW);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+      throw error;
+    }
+    let source: Buffer;
+    try {
+      const metadata = await sourceHandle.stat();
+      if (!metadata.isFile() || metadata.size > 4 * 1024 * 1024) throw new Error('Runner artifact is unsafe.');
+      source = await sourceHandle.readFile();
+    } finally { await sourceHandle.close(); }
+
+    const digest = createHash('sha256').update(source).digest('hex');
+    const runtimeRoot = join(stateRoot, 'runtime');
+    try { await mkdir(runtimeRoot, { mode: 0o700 }); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
+    const runtimeMetadata = await lstat(runtimeRoot);
+    if (!runtimeMetadata.isDirectory() || runtimeMetadata.isSymbolicLink()) throw new Error('Runner runtime directory is unsafe.');
+    await chmod(runtimeRoot, 0o700);
+
+    const target = join(runtimeRoot, `runner-${digest}.mjs`);
+    const temporary = join(runtimeRoot, `.runner-${process.pid}-${randomBytes(8).toString('hex')}.tmp`);
+    let temporaryHandle;
+    try {
+      temporaryHandle = await open(
+        temporary,
+        constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW,
+        0o600,
+      );
+      await temporaryHandle.writeFile(source);
+      await temporaryHandle.sync();
+    } finally { await temporaryHandle?.close(); }
+    try {
+      try { await link(temporary, target); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
+    } finally { await unlink(temporary).catch(() => undefined); }
+
+    const targetMetadata = await lstat(target);
+    if (!targetMetadata.isFile() || targetMetadata.isSymbolicLink()) throw new Error('Runner artifact is unsafe.');
+    const targetHandle = await open(target, constants.O_RDONLY | constants.O_NOFOLLOW);
+    let targetDigest: string;
+    try { targetDigest = createHash('sha256').update(await targetHandle.readFile()).digest('hex'); }
+    finally { await targetHandle.close(); }
+    if (targetDigest !== digest) throw new Error('Runner artifact failed integrity verification.');
+    await chmod(target, 0o600);
+    this.stableRunnerPath = target;
+  }
+
   async launch(request: RunnerLaunchRequest): Promise<RunnerLaunchResult> {
-    const runnerPath = fileURLToPath(new URL('./runner.mjs', import.meta.url));
+    await this.prepare(request.stateRoot);
+    const runnerPath = this.stableRunnerPath;
+    if (!runnerPath) throw new Error('Runner artifact is unavailable.');
     const child = spawn(process.execPath, [
       runnerPath, '--state-root', request.stateRoot, '--job-id', request.jobId, '--runner-token', request.runnerToken,
-    ], { detached: true, shell: false, stdio: 'ignore', windowsHide: true });
+    ], { cwd: '/', detached: true, shell: false, stdio: 'ignore', windowsHide: true });
     if (!child.pid) throw new Error('Runner did not start.');
     child.unref();
     const identity = await this.inspector(child.pid);
@@ -146,6 +210,7 @@ export class JobService {
 
   async startup(): Promise<void> {
     await this.store.init();
+    await this.launcher.prepare?.(this.store.stateRoot);
     await this.cleanup();
     for (const record of await this.store.list()) {
       if (record.job.state !== 'running') continue;

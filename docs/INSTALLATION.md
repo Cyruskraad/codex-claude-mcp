@@ -25,10 +25,10 @@ Start a new Codex task so the MCP tools and `claude-code-bridge` skill are disco
 
 ## Release ZIP
 
-Download `codex-claude-mcp-v0.1.2.zip`, its `.sha256` file, and the CycloneDX SBOM from the [v0.1.2 release](https://github.com/Cyruskraad/codex-claude-mcp/releases/tag/v0.1.2). Verify the checksum:
+Download `codex-claude-mcp-v0.1.3.zip`, its `.sha256` file, and the CycloneDX SBOM from the [v0.1.3 release](https://github.com/Cyruskraad/codex-claude-mcp/releases/tag/v0.1.3). Verify the checksum:
 
 ```sh
-shasum -a 256 -c codex-claude-mcp-v0.1.2.zip.sha256
+shasum -a 256 -c codex-claude-mcp-v0.1.3.zip.sha256
 ```
 
 The ZIP is a standalone plugin-root artifact, not a marketplace catalog. Codex users should use the Git marketplace above. Other stdio clients can extract the ZIP to a stable directory and point directly at its bundled server as shown below.

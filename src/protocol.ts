@@ -152,7 +152,7 @@ export const SERVER_INSTRUCTIONS = [
 
 export function createClaudeMcpServer(dependencies: ClaudeMcpServerDependencies): McpServer {
   const server = new McpServer(
-    { name: 'codex-claude-mcp', version: '0.1.2' },
+    { name: 'codex-claude-mcp', version: '0.1.3' },
     { instructions: SERVER_INSTRUCTIONS, capabilities: { tools: {} } },
   );
 

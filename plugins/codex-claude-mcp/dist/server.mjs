@@ -409,11 +409,11 @@ var require_codegen = __commonJS({
         const rhs = this.rhs === void 0 ? "" : ` = ${this.rhs}`;
         return `${varKind} ${this.name}${rhs};` + _n;
       }
-      optimizeNames(names, constants3) {
+      optimizeNames(names, constants4) {
         if (!names[this.name.str])
           return;
         if (this.rhs)
-          this.rhs = optimizeExpr(this.rhs, names, constants3);
+          this.rhs = optimizeExpr(this.rhs, names, constants4);
         return this;
       }
       get names() {
@@ -430,10 +430,10 @@ var require_codegen = __commonJS({
       render({ _n }) {
         return `${this.lhs} = ${this.rhs};` + _n;
       }
-      optimizeNames(names, constants3) {
+      optimizeNames(names, constants4) {
         if (this.lhs instanceof code_1.Name && !names[this.lhs.str] && !this.sideEffects)
           return;
-        this.rhs = optimizeExpr(this.rhs, names, constants3);
+        this.rhs = optimizeExpr(this.rhs, names, constants4);
         return this;
       }
       get names() {
@@ -494,8 +494,8 @@ var require_codegen = __commonJS({
       optimizeNodes() {
         return `${this.code}` ? this : void 0;
       }
-      optimizeNames(names, constants3) {
-        this.code = optimizeExpr(this.code, names, constants3);
+      optimizeNames(names, constants4) {
+        this.code = optimizeExpr(this.code, names, constants4);
         return this;
       }
       get names() {
@@ -524,12 +524,12 @@ var require_codegen = __commonJS({
         }
         return nodes.length > 0 ? this : void 0;
       }
-      optimizeNames(names, constants3) {
+      optimizeNames(names, constants4) {
         const { nodes } = this;
         let i = nodes.length;
         while (i--) {
           const n = nodes[i];
-          if (n.optimizeNames(names, constants3))
+          if (n.optimizeNames(names, constants4))
             continue;
           subtractNames(names, n.names);
           nodes.splice(i, 1);
@@ -582,12 +582,12 @@ var require_codegen = __commonJS({
           return void 0;
         return this;
       }
-      optimizeNames(names, constants3) {
+      optimizeNames(names, constants4) {
         var _a;
-        this.else = (_a = this.else) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants3);
-        if (!(super.optimizeNames(names, constants3) || this.else))
+        this.else = (_a = this.else) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants4);
+        if (!(super.optimizeNames(names, constants4) || this.else))
           return;
-        this.condition = optimizeExpr(this.condition, names, constants3);
+        this.condition = optimizeExpr(this.condition, names, constants4);
         return this;
       }
       get names() {
@@ -610,10 +610,10 @@ var require_codegen = __commonJS({
       render(opts) {
         return `for(${this.iteration})` + super.render(opts);
       }
-      optimizeNames(names, constants3) {
-        if (!super.optimizeNames(names, constants3))
+      optimizeNames(names, constants4) {
+        if (!super.optimizeNames(names, constants4))
           return;
-        this.iteration = optimizeExpr(this.iteration, names, constants3);
+        this.iteration = optimizeExpr(this.iteration, names, constants4);
         return this;
       }
       get names() {
@@ -649,10 +649,10 @@ var require_codegen = __commonJS({
       render(opts) {
         return `for(${this.varKind} ${this.name} ${this.loop} ${this.iterable})` + super.render(opts);
       }
-      optimizeNames(names, constants3) {
-        if (!super.optimizeNames(names, constants3))
+      optimizeNames(names, constants4) {
+        if (!super.optimizeNames(names, constants4))
           return;
-        this.iterable = optimizeExpr(this.iterable, names, constants3);
+        this.iterable = optimizeExpr(this.iterable, names, constants4);
         return this;
       }
       get names() {
@@ -694,11 +694,11 @@ var require_codegen = __commonJS({
         (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNodes();
         return this;
       }
-      optimizeNames(names, constants3) {
+      optimizeNames(names, constants4) {
         var _a, _b;
-        super.optimizeNames(names, constants3);
-        (_a = this.catch) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants3);
-        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNames(names, constants3);
+        super.optimizeNames(names, constants4);
+        (_a = this.catch) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants4);
+        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNames(names, constants4);
         return this;
       }
       get names() {
@@ -999,7 +999,7 @@ var require_codegen = __commonJS({
     function addExprNames(names, from) {
       return from instanceof code_1._CodeOrName ? addNames(names, from.names) : names;
     }
-    function optimizeExpr(expr, names, constants3) {
+    function optimizeExpr(expr, names, constants4) {
       if (expr instanceof code_1.Name)
         return replaceName(expr);
       if (!canOptimize(expr))
@@ -1014,14 +1014,14 @@ var require_codegen = __commonJS({
         return items;
       }, []));
       function replaceName(n) {
-        const c = constants3[n.str];
+        const c = constants4[n.str];
         if (c === void 0 || names[n.str] !== 1)
           return n;
         delete names[n.str];
         return c;
       }
       function canOptimize(e) {
-        return e instanceof code_1._Code && e._items.some((c) => c instanceof code_1.Name && names[c.str] === 1 && constants3[c.str] !== void 0);
+        return e instanceof code_1._Code && e._items.some((c) => c instanceof code_1.Name && names[c.str] === 1 && constants4[c.str] !== void 0);
       }
     }
     function subtractNames(names, from) {
@@ -13341,8 +13341,18 @@ function isCanonicalEntrypoint(moduleUrl, invokedPath) {
 import { createHash as createHash2, createHmac, randomBytes as randomBytes2 } from "crypto";
 import { spawn as spawn3 } from "child_process";
 import { EventEmitter } from "events";
-import { readFile as readFile2 } from "fs/promises";
+import { constants as constants3 } from "fs";
+import {
+  chmod as chmod2,
+  link as link2,
+  lstat as lstat2,
+  mkdir as mkdir2,
+  open as open2,
+  readFile as readFile2,
+  unlink as unlink2
+} from "fs/promises";
 import { platform as platform2 } from "os";
+import { join as join3 } from "path";
 import { fileURLToPath as fileURLToPath2 } from "url";
 
 // node_modules/zod/v3/external.js
@@ -18532,8 +18542,75 @@ var DetachedRunnerLauncher = class {
     this.inspector = inspector;
   }
   inspector;
+  stableRunnerPath;
+  async prepare(stateRoot) {
+    if (this.stableRunnerPath) return;
+    const sourcePath = fileURLToPath2(new URL("./runner.mjs", import.meta.url));
+    let sourceHandle;
+    try {
+      sourceHandle = await open2(sourcePath, constants3.O_RDONLY | constants3.O_NOFOLLOW);
+    } catch (error2) {
+      if (error2.code === "ENOENT") return;
+      throw error2;
+    }
+    let source;
+    try {
+      const metadata = await sourceHandle.stat();
+      if (!metadata.isFile() || metadata.size > 4 * 1024 * 1024) throw new Error("Runner artifact is unsafe.");
+      source = await sourceHandle.readFile();
+    } finally {
+      await sourceHandle.close();
+    }
+    const digest = createHash2("sha256").update(source).digest("hex");
+    const runtimeRoot = join3(stateRoot, "runtime");
+    try {
+      await mkdir2(runtimeRoot, { mode: 448 });
+    } catch (error2) {
+      if (error2.code !== "EEXIST") throw error2;
+    }
+    const runtimeMetadata = await lstat2(runtimeRoot);
+    if (!runtimeMetadata.isDirectory() || runtimeMetadata.isSymbolicLink()) throw new Error("Runner runtime directory is unsafe.");
+    await chmod2(runtimeRoot, 448);
+    const target = join3(runtimeRoot, `runner-${digest}.mjs`);
+    const temporary = join3(runtimeRoot, `.runner-${process.pid}-${randomBytes2(8).toString("hex")}.tmp`);
+    let temporaryHandle;
+    try {
+      temporaryHandle = await open2(
+        temporary,
+        constants3.O_CREAT | constants3.O_EXCL | constants3.O_WRONLY | constants3.O_NOFOLLOW,
+        384
+      );
+      await temporaryHandle.writeFile(source);
+      await temporaryHandle.sync();
+    } finally {
+      await temporaryHandle?.close();
+    }
+    try {
+      try {
+        await link2(temporary, target);
+      } catch (error2) {
+        if (error2.code !== "EEXIST") throw error2;
+      }
+    } finally {
+      await unlink2(temporary).catch(() => void 0);
+    }
+    const targetMetadata = await lstat2(target);
+    if (!targetMetadata.isFile() || targetMetadata.isSymbolicLink()) throw new Error("Runner artifact is unsafe.");
+    const targetHandle = await open2(target, constants3.O_RDONLY | constants3.O_NOFOLLOW);
+    let targetDigest;
+    try {
+      targetDigest = createHash2("sha256").update(await targetHandle.readFile()).digest("hex");
+    } finally {
+      await targetHandle.close();
+    }
+    if (targetDigest !== digest) throw new Error("Runner artifact failed integrity verification.");
+    await chmod2(target, 384);
+    this.stableRunnerPath = target;
+  }
   async launch(request) {
-    const runnerPath = fileURLToPath2(new URL("./runner.mjs", import.meta.url));
+    await this.prepare(request.stateRoot);
+    const runnerPath = this.stableRunnerPath;
+    if (!runnerPath) throw new Error("Runner artifact is unavailable.");
     const child = spawn3(process.execPath, [
       runnerPath,
       "--state-root",
@@ -18542,7 +18619,7 @@ var DetachedRunnerLauncher = class {
       request.jobId,
       "--runner-token",
       request.runnerToken
-    ], { detached: true, shell: false, stdio: "ignore", windowsHide: true });
+    ], { cwd: "/", detached: true, shell: false, stdio: "ignore", windowsHide: true });
     if (!child.pid) throw new Error("Runner did not start.");
     child.unref();
     const identity = await this.inspector(child.pid);
@@ -18597,6 +18674,7 @@ var JobService = class {
   }
   async startup() {
     await this.store.init();
+    await this.launcher.prepare?.(this.store.stateRoot);
     await this.cleanup();
     for (const record2 of await this.store.list()) {
       if (record2.job.state !== "running") continue;
@@ -23276,7 +23354,7 @@ var SERVER_INSTRUCTIONS = [
 ].join(" ");
 function createClaudeMcpServer(dependencies) {
   const server = new McpServer(
-    { name: "codex-claude-mcp", version: "0.1.2" },
+    { name: "codex-claude-mcp", version: "0.1.3" },
     { instructions: SERVER_INSTRUCTIONS, capabilities: { tools: {} } }
   );
   server.registerTool("claude_health", {

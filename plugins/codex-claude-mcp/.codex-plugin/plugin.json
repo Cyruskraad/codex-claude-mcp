@@ -1,6 +1,6 @@
 {
   "name": "codex-claude-mcp",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Run permission-aware local Claude Code tasks from Codex with explicit models, effort, sessions, and durable jobs.",
   "author": {
     "name": "Cyruskraad",

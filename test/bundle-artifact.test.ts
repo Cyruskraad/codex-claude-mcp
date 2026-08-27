@@ -1,5 +1,7 @@
 import { spawn } from 'node:child_process';
-import { copyFile, mkdir, mkdtemp, readFile, symlink } from 'node:fs/promises';
+import {
+  copyFile, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -8,6 +10,7 @@ import { describe, expect, it } from 'vitest';
 
 const repositoryRoot = resolve(import.meta.dirname, '..');
 const bundleDirectory = join(repositoryRoot, 'plugins/codex-claude-mcp/dist');
+const fakeClaude = join(repositoryRoot, 'test/fixtures/fake-claude.mjs');
 
 async function executeAlone(source: string): Promise<{ code: number | null; signal: NodeJS.Signals | null; stderr: string }> {
   const root = await mkdtemp(join(tmpdir(), 'codex-claude-single-bundle-'));
@@ -80,7 +83,7 @@ describe('self-contained production bundles', () => {
 
   it('initializes the MCP server when its bundle is invoked through a symlink alias', async () => {
     await expect(initializeAliasedServer(join(bundleDirectory, 'server.mjs'))).resolves.toEqual({
-      name: 'codex-claude-mcp', version: '0.1.2',
+      name: 'codex-claude-mcp', version: '0.1.3',
     });
   });
 
@@ -93,5 +96,56 @@ describe('self-contained production bundles', () => {
       child.once('error', rejectExit);
       child.once('close', (code, signal) => resolveExit({ code, signal }));
     })).resolves.toEqual({ code: 2, signal: null });
+  });
+
+  it('completes a detached task after Codex replaces the live plugin cache directory', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'codex-claude-cache-refresh-'));
+    const cache = join(root, 'plugin-cache');
+    const stateRoot = join(root, 'state');
+    const control = join(root, 'fake-control');
+    const workspacePath = join(root, 'workspace');
+    await mkdir(cache);
+    await mkdir(control);
+    await mkdir(workspacePath);
+    const workspace = await realpath(workspacePath);
+    await copyFile(join(bundleDirectory, 'server.mjs'), join(cache, 'server.mjs'));
+    await copyFile(join(bundleDirectory, 'runner.mjs'), join(cache, 'runner.mjs'));
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [join(cache, 'server.mjs')],
+      cwd: cache,
+      env: {
+        HOME: process.env.HOME ?? tmpdir(),
+        PATH: process.env.PATH ?? '',
+        CODEX_CLAUDE_MCP_STATE_DIR: stateRoot,
+        CODEX_CLAUDE_MCP_CLAUDE_PATH: fakeClaude,
+        FAKE_CLAUDE_CONTROL_DIR: control,
+      },
+      stderr: 'pipe',
+    });
+    const client = new Client({ name: 'cache-refresh-test', version: '0.1.0' });
+    try {
+      await client.connect(transport);
+      await rm(cache, { recursive: true, force: true });
+      const result = await client.callTool({
+        name: 'claude_task',
+        arguments: {
+          workspace,
+          prompt: 'synthetic cache refresh task',
+          access: 'inspect',
+          execution: { mode: 'sync', timeout_seconds: 30 },
+        },
+      });
+      expect(result.structuredContent, JSON.stringify(result)).toMatchObject({
+        job: { state: 'succeeded', result_preview: 'héllo 🌍' },
+      });
+      const runtimeRoot = join(stateRoot, 'runtime');
+      const artifacts = await readdir(runtimeRoot);
+      expect(artifacts).toEqual([expect.stringMatching(/^runner-[a-f0-9]{64}\.mjs$/)]);
+      expect((await stat(runtimeRoot)).mode & 0o777).toBe(0o700);
+      expect((await stat(join(runtimeRoot, artifacts[0]!))).mode & 0o777).toBe(0o600);
+    } finally {
+      await client.close().catch(() => undefined);
+    }
   });
 });
