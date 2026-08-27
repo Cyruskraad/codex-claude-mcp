@@ -1,0 +1,9 @@
+node_modules/
+coverage/
+dist/
+plugins/codex-claude-mcp/dist/
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store

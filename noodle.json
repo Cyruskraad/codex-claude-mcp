@@ -1,0 +1,9 @@
+{
+  "entrypoint": "src/noodle-authoring.ts",
+  "name": "codex_claude_mcp_authoring",
+  "template": "saas",
+  "agents": [
+    "codex",
+    "claude-code"
+  ]
+}

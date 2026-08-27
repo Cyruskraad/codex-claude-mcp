@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "claude-code-bridge": {
+      "command": "node",
+      "args": ["./dist/server.mjs"],
+      "cwd": "."
+    }
+  }
+}

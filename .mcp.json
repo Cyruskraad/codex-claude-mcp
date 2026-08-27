@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "noodle-docs": {
+      "type": "https",
+      "url": "https://docs.noodleseed.dev/mcp"
+    }
+  }
+}
