@@ -19,7 +19,7 @@ async function makePluginFixture(): Promise<string> {
   ]);
   const files: Record<string, string> = {
     '.codex-plugin/plugin.json': `${JSON.stringify({
-      name: 'codex-claude-mcp', version: '0.1.0', mcpServers: './.mcp.json', skills: './skills/',
+      name: 'codex-claude-mcp', version: '0.1.1', mcpServers: './.mcp.json', skills: './skills/',
       interface: {
         displayName: 'Claude Code Bridge', category: 'Developer Tools', brandColor: '#7C3AED',
         composerIcon: './assets/composer-icon.png', logo: './assets/logo.png', logoDark: './assets/logo-dark.png',
@@ -53,6 +53,27 @@ describe('delivery scripts', () => {
     ]);
     expect(stdout).toBe('Dependency resolutions satisfy the release security policy.\n');
     expect(stderr).toBe('');
+  });
+
+  it('rejects release artifact names that disagree with the package version', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'claude-bridge-release-version-'));
+    await Promise.all([
+      copyFile(join(repositoryRoot, 'package.json'), join(root, 'package.json')),
+      copyFile(join(repositoryRoot, 'package-lock.json'), join(root, 'package-lock.json')),
+      mkdir(join(root, '.github', 'workflows'), { recursive: true }),
+    ]);
+    const workflow = await readFile(join(repositoryRoot, '.github', 'workflows', 'ci.yml'), 'utf8');
+    await writeFile(
+      join(root, '.github', 'workflows', 'ci.yml'),
+      workflow.replaceAll('codex-claude-mcp-v0.1.1', 'codex-claude-mcp-v9.9.9'),
+    );
+
+    await expect(execute(process.execPath, [
+      join(repositoryRoot, 'scripts/validate-dependencies.mjs'), '--root', root,
+    ])).rejects.toMatchObject({
+      code: 1,
+      stderr: expect.stringContaining('CI release artifact names must match package version 0.1.1.'),
+    });
   });
 
   it('rejects an unreviewed GitHub Actions commit pin', async () => {
@@ -137,7 +158,7 @@ describe('delivery scripts', () => {
       join(repositoryRoot, 'scripts/generate-sbom.mjs'), '--root', root, '--output-dir', outputs[index],
     ])));
     const files = await Promise.all(outputs.map((output) => readFile(
-      join(output, 'codex-claude-mcp-v0.1.0.cdx.json'), 'utf8',
+      join(output, 'codex-claude-mcp-v0.1.1.cdx.json'), 'utf8',
     )));
     expect(files[1]).toBe(files[0]);
 
@@ -150,7 +171,7 @@ describe('delivery scripts', () => {
     };
     expect(sbom.metadata.component).toMatchObject({
       name: 'codex-claude-mcp',
-      version: '0.1.0',
+      version: '0.1.1',
       description: 'A local Codex MCP bridge for permission-aware Claude Code tasks.',
       licenses: [{ license: { id: 'MIT' } }],
       externalReferences: [
@@ -211,13 +232,13 @@ describe('delivery scripts', () => {
       '--skip-sbom',
     ];
     await execute(process.execPath, command);
-    const first = await readFile(join(output, 'codex-claude-mcp-v0.1.0.zip.sha256'), 'utf8');
+    const first = await readFile(join(output, 'codex-claude-mcp-v0.1.1.zip.sha256'), 'utf8');
     await execute(process.execPath, command);
-    const second = await readFile(join(output, 'codex-claude-mcp-v0.1.0.zip.sha256'), 'utf8');
+    const second = await readFile(join(output, 'codex-claude-mcp-v0.1.1.zip.sha256'), 'utf8');
     expect(second).toBe(first);
 
     const { stdout } = await execute('unzip', [
-      '-Z1', join(output, 'codex-claude-mcp-v0.1.0.zip'),
+      '-Z1', join(output, 'codex-claude-mcp-v0.1.1.zip'),
     ]);
     const entries = stdout.trim().split('\n');
     expect(entries).toContain('codex-claude-mcp/dist/server.mjs');

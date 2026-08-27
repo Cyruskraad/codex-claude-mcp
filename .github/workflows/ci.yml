@@ -78,17 +78,17 @@ jobs:
       - run: npm run notices
       - run: git diff --exit-code -- plugins/codex-claude-mcp/THIRD_PARTY_NOTICES.md
       - run: npm run release:package
-      - run: sha256sum -c codex-claude-mcp-v0.1.0.zip.sha256
+      - run: sha256sum -c codex-claude-mcp-v0.1.1.zip.sha256
         working-directory: release
-      - run: unzip -t release/codex-claude-mcp-v0.1.0.zip
+      - run: unzip -t release/codex-claude-mcp-v0.1.1.zip
       - name: Upload release candidates
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: codex-claude-mcp-v0.1.0
+          name: codex-claude-mcp-v0.1.1
           path: |
-            release/codex-claude-mcp-v0.1.0.zip
-            release/codex-claude-mcp-v0.1.0.zip.sha256
-            release/codex-claude-mcp-v0.1.0.cdx.json
+            release/codex-claude-mcp-v0.1.1.zip
+            release/codex-claude-mcp-v0.1.1.zip.sha256
+            release/codex-claude-mcp-v0.1.1.cdx.json
           if-no-files-found: error
 
   gitleaks:

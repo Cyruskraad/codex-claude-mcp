@@ -18889,6 +18889,7 @@ async function runProbe(executable, args, timeoutMilliseconds, outputLimitBytes,
   return runBoundedProcess({
     executable,
     args,
+    cwd: "/",
     environment,
     timeoutMilliseconds,
     outputLimitBytes,
@@ -23275,7 +23276,7 @@ var SERVER_INSTRUCTIONS = [
 ].join(" ");
 function createClaudeMcpServer(dependencies) {
   const server = new McpServer(
-    { name: "codex-claude-mcp", version: "0.1.0" },
+    { name: "codex-claude-mcp", version: "0.1.1" },
     { instructions: SERVER_INSTRUCTIONS, capabilities: { tools: {} } }
   );
   server.registerTool("claude_health", {

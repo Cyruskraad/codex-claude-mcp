@@ -7,6 +7,14 @@ import { setTimeout as delay } from 'node:timers/promises';
 const control = process.env.FAKE_CLAUDE_CONTROL_DIR;
 const scenario = process.env.FAKE_CLAUDE_SCENARIO ?? 'success';
 
+if (process.env.FAKE_HEALTH_PROBE_RECORD) {
+  await appendFile(
+    process.env.FAKE_HEALTH_PROBE_RECORD,
+    `${JSON.stringify({ argv: process.argv.slice(2), cwd: process.cwd() })}\n`,
+    { mode: 0o600 },
+  );
+}
+
 if (process.argv.includes('--version')) {
   if (process.env.FAKE_VERSION_SCENARIO === 'flood') {
     process.stdout.write(Buffer.alloc(4097, 118));

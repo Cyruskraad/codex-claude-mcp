@@ -14,7 +14,7 @@ Claude Code Bridge intentionally has a small configuration surface.
 | `ANTHROPIC_API_KEY` | Optional standard non-interactive Claude API authentication. |
 | `CLAUDE_CODE_OAUTH_TOKEN` | Optional standard non-interactive Claude Code OAuth authentication. |
 
-The packaged Codex configuration allows only these variables. A normal cached `claude auth login` session located through `HOME` is preferred. The two optional non-interactive credential variables are forwarded only when the user has already set them; their values are never command-line arguments, bridge state fields, or logs. Proxy, base-URL, and cloud-provider variables are deliberately omitted because v0.1.0 does not test those authentication paths. A generic MCP client may configure a different provider environment under Claude Code's own documentation and should treat every provider value as a credential.
+The packaged Codex configuration allows only these variables. A normal cached `claude auth login` session located through `HOME` is preferred. The two optional non-interactive credential variables are forwarded only when the user has already set them; their values are never command-line arguments, bridge state fields, or logs. Proxy, base-URL, and cloud-provider variables are deliberately omitted because v0.1.x does not test those authentication paths. A generic MCP client may configure a different provider environment under Claude Code's own documentation and should treat every provider value as a credential.
 
 ## Claude discovery
 

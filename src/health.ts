@@ -37,6 +37,7 @@ async function runProbe(
   return runBoundedProcess({
     executable,
     args,
+    cwd: '/',
     environment,
     timeoutMilliseconds,
     outputLimitBytes,

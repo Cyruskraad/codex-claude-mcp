@@ -1,6 +1,6 @@
 # WSL2
 
-WSL2 is supported through the Linux runtime path. Native Windows is not supported in v0.1.0.
+WSL2 is supported through the Linux runtime path. Native Windows is not supported in v0.1.x.
 
 ## Setup
 

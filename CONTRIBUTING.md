@@ -28,7 +28,7 @@ Noodle's pinned authoring package may report advisories in dependencies bundled 
 
 ## Pull requests
 
-- Keep the public version at `0.1.0` unless the release owner asks for a version change.
+- Keep the public version at the current release unless the release owner asks for a version change.
 - Update documentation and `CHANGELOG.md` for user-visible behavior.
 - Do not commit secrets, prompts, raw authentication output, or private Claude results.
 - Do not add permission-bypass flags, Chrome, nested MCP, shell execution, or implicit latest-session continuation.

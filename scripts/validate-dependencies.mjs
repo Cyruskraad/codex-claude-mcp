@@ -59,6 +59,16 @@ async function main() {
     assert(observedActions.has(action), `The CI workflow is missing reviewed action ${action}.`);
   }
 
+  const expectedReleaseName = `codex-claude-mcp-v${packageJson.version}`;
+  const observedReleaseNames = workflows.flatMap((workflow) => (
+    [...workflow.matchAll(/codex-claude-mcp-v\d+\.\d+\.\d+/gu)].map(([name]) => name)
+  ));
+  assert(observedReleaseNames.length > 0, 'The CI workflow is missing release artifact names.');
+  assert(
+    observedReleaseNames.every((name) => name === expectedReleaseName),
+    `CI release artifact names must match package version ${packageJson.version}.`,
+  );
+
   assert(packageJson.dependencies?.zod === '3.25.76', 'The root Zod dependency must remain pinned to 3.25.76.');
   assert(packageJson.devDependencies?.['@noodleseed/one'] === '0.142.1', 'Noodle Seed must remain pinned to 0.142.1.');
   assert(packageJson.devDependencies?.esbuild === '0.28.2', 'The direct esbuild build dependency must be pinned to 0.28.2.');

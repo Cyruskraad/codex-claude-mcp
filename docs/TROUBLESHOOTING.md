@@ -29,7 +29,7 @@ The bridge runs two jobs concurrently. Poll status while earlier jobs finish or 
 
 ## Timed out or output limited
 
-Increase `timeout_seconds` up to 7,200 only when the task warrants it. Split broad prompts into smaller tasks. Raw output is capped at 32 MiB and cannot be raised in v0.1.0.
+Increase `timeout_seconds` up to 7,200 only when the task warrants it. Split broad prompts into smaller tasks. Raw output is capped at 32 MiB and cannot be raised in v0.1.x.
 
 ## Orphaned job
 

@@ -7,7 +7,7 @@ import { server, tool, z } from '@noodleseed/one';
 export default server('codex_claude_mcp_authoring', {
   instructions: 'Validate local project authoring metadata for the Codex Claude MCP bridge.',
   title: 'Codex Claude MCP Authoring',
-  version: '0.1.0',
+  version: '0.1.1',
 }, [
   tool('authoring_status', {
     description: 'Report that Noodle validation is limited to local authoring metadata.',

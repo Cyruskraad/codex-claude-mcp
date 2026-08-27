@@ -23,6 +23,31 @@ const helpWithoutCloudName = [
 ].join('\n');
 
 describe('Claude health probe', () => {
+  it('runs every CLI readiness probe from the stable POSIX root', async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'codex-claude-health-cwd-')));
+    const record = join(root, 'probes.jsonl');
+
+    const health = await probeClaudeHealth({
+      environment: completeEnvironment({
+        FAKE_CLAUDE_HELP: helpWithoutMaxTurns,
+        FAKE_HEALTH_PROBE_RECORD: record,
+      }),
+    });
+
+    const probes = (await readFile(record, 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as { argv: string[]; cwd: string });
+    expect(health.status).toBe('ready');
+    expect(probes.map(({ argv }) => argv)).toEqual([
+      ['--version'],
+      ['--help'],
+      ['-p', '--max-turns', '0'],
+      ['auth', 'status'],
+    ]);
+    expect(probes.every(({ cwd }) => cwd === '/')).toBe(true);
+  });
+
   it('reports supported noninteractive session modes without treating cloud creation as readiness', async () => {
     const health = await probeClaudeHealth({
       environment: completeEnvironment({ FAKE_CLAUDE_HELP: helpWithoutCloudName }),

@@ -80,7 +80,7 @@ async function main() {
   await mkdir(outputDirectory, { recursive: true });
   const packageJson = JSON.parse(await readFile(join(repositoryRoot, 'package.json'), 'utf8'));
   const sbom = sortSbom(normalizeRoot(JSON.parse(await npmSbom(repositoryRoot)), packageJson));
-  const output = join(outputDirectory, 'codex-claude-mcp-v0.1.0.cdx.json');
+  const output = join(outputDirectory, `codex-claude-mcp-v${packageJson.version}.cdx.json`);
   await writeFile(output, `${JSON.stringify(sbom, null, 2)}\n`, { mode: 0o644 });
   process.stdout.write(`Created ${output}\n`);
 }

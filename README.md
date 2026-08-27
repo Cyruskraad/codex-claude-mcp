@@ -20,7 +20,7 @@ The bridge itself runs entirely on your computer. It does not host an MCP servic
 
 - Node.js 20.19 or newer
 - Claude Code CLI 2.1.0 or newer, installed and authenticated
-- macOS, Linux, or WSL2; native Windows is not supported in v0.1.0
+- macOS, Linux, or WSL2; native Windows is not supported in v0.1.x
 - A Git worktree for write-mode tasks
 
 ## Install
