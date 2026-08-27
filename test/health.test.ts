@@ -1,0 +1,129 @@
+import { chmod, copyFile, mkdir, mkdtemp, realpath, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
+import { describe, expect, it } from 'vitest';
+import { probeClaudeHealth } from '../src/health.js';
+
+const fakeClaude = resolve(import.meta.dirname, 'fixtures/fake-claude.mjs');
+const nodeBin = dirname(process.execPath);
+const completeEnvironment = (overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv => ({
+  PATH: `${nodeBin}:${process.env.PATH ?? ''}`,
+  CODEX_CLAUDE_MCP_CLAUDE_PATH: fakeClaude,
+  ...overrides,
+});
+
+describe('Claude health probe', () => {
+  it('passes only the injected probe environment and gives exit zero precedence over sensitive auth prose', async () => {
+    const injected = await probeClaudeHealth({
+      environment: completeEnvironment({
+        FAKE_AUTH_SCENARIO: 'unknown',
+        FAKE_AUTH_OUTPUT: 'private injected profile person@example.test',
+      }),
+    });
+    expect(injected.authentication).toEqual({ status: 'unknown', ready: false });
+    const health = await probeClaudeHealth({
+      environment: completeEnvironment({
+        FAKE_AUTH_SCENARIO: 'ready',
+        FAKE_AUTH_OUTPUT: 'session expired; log in again person@example.test sk-ant-api03-private',
+      }),
+      homeDirectory: '/unrelated-home',
+      bridgeCounts: async () => ({ runningJobs: 2, queuedJobs: 3 }),
+    });
+    expect(health).toMatchObject({
+      status: 'ready', authentication: { status: 'ready', ready: true },
+      bridge: { running_jobs: 2, queued_jobs: 3, concurrency_limit: 2 },
+    });
+    expect(JSON.stringify(health)).not.toMatch(/person@example|sk-ant|expired|log in again/i);
+  });
+
+  it.each([
+    ['a timed-out version probe', { FAKE_VERSION_SCENARIO: 'hang' }, 'probe_timeout'],
+    ['a byte-limited version probe', { FAKE_VERSION_SCENARIO: 'flood' }, 'probe_timeout'],
+    ['a timed-out help probe', { FAKE_HELP_SCENARIO: 'hang' }, 'probe_timeout'],
+    ['a byte-limited help probe', { FAKE_HELP_SCENARIO: 'flood' }, 'probe_timeout'],
+    ['a combined-stream byte-limited help probe', { FAKE_HELP_SCENARIO: 'combined-flood' }, 'probe_timeout'],
+    ['a timed-out auth probe', { FAKE_AUTH_SCENARIO: 'hang' }, 'probe_timeout'],
+  ] as const)('bounds and reaps %s', async (_name, scenario, issue) => {
+    const started = Date.now();
+    const health = await probeClaudeHealth({
+      environment: completeEnvironment(scenario),
+      timeouts: { version: 250, help: 250, auth: 250, killGrace: 20 },
+    });
+    expect(health.issues).toContain(issue);
+    expect(Date.now() - started).toBeLessThan(1_500);
+  });
+
+  it('skips empty and relative PATH entries and selects a canonical executable from an absolute entry', async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'codex-claude-health-path-')));
+    const bin = join(root, 'bin');
+    await mkdir(bin);
+    await symlink(fakeClaude, join(bin, 'claude'));
+    const health = await probeClaudeHealth({
+      environment: {
+        PATH: `${['', 'relative-bin', bin, nodeBin].join(':')}`,
+        FAKE_AUTH_SCENARIO: 'ready',
+      },
+      homeDirectory: '/unrelated-home',
+    });
+    expect(health).toMatchObject({
+      status: 'ready', cli: { found: true, path: fakeClaude, resolution: 'path', version_status: 'supported' },
+    });
+  });
+
+  it.each([
+    ['too-old version', { FAKE_CLAUDE_VERSION: '2.0.99 (Claude Code)' }, 'too_old', 'version_too_old', 'not_checked'],
+    ['malformed version', { FAKE_CLAUDE_VERSION: 'private malformed version' }, 'malformed', 'version_malformed', 'not_checked'],
+    ['missing feature', { FAKE_CLAUDE_HELP: '--print --input-format stream-json' }, 'supported', 'required_feature_missing', 'ready'],
+    ['not-ready auth', { FAKE_AUTH_SCENARIO: 'not_ready', FAKE_AUTH_OUTPUT: 'not logged in' }, 'supported', 'authentication_not_ready', 'not_ready'],
+    ['expired auth', { FAKE_AUTH_SCENARIO: 'expired', FAKE_AUTH_OUTPUT: 'session expired; log in again' }, 'supported', 'authentication_expired', 'expired'],
+    ['unknown auth', { FAKE_AUTH_SCENARIO: 'unknown', FAKE_AUTH_OUTPUT: 'private profile' }, 'supported', 'authentication_unknown', 'unknown'],
+  ] as const)('normalizes %s to stable health fields', async (_name, scenario, versionStatus, issue, authentication) => {
+    const health = await probeClaudeHealth({ environment: completeEnvironment(scenario) });
+    expect(health.status).toBe('degraded');
+    expect(health.cli.version_status).toBe(versionStatus);
+    expect(health.authentication.status).toBe(authentication);
+    expect(health.issues).toContain(issue);
+    expect(JSON.stringify(health)).not.toContain('private');
+  });
+
+  it.each([
+    ['missing', '/definitely/missing/claude', 'not_found', 'cli_not_found'],
+    ['relative', 'relative/claude', 'not_executable', 'cli_not_executable'],
+    ['empty', '', 'not_executable', 'cli_not_executable'],
+  ] as const)('keeps a %s explicit override authoritative', async (_name, override, status, issue) => {
+    const health = await probeClaudeHealth({
+      environment: { PATH: `${dirname(fakeClaude)}:${nodeBin}`, CODEX_CLAUDE_MCP_CLAUDE_PATH: override },
+    });
+    expect(health).toMatchObject({ status: 'unavailable', cli: { found: false, version_status: status } });
+    expect(health.issues).toEqual([issue]);
+  });
+
+  it('classifies an existing non-executable override without falling back', async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'codex-claude-health-file-')));
+    const candidate = join(root, 'claude');
+    await writeFile(candidate, '#!/bin/sh\n', { mode: 0o600 });
+    const health = await probeClaudeHealth({
+      environment: { PATH: `${dirname(fakeClaude)}:${nodeBin}`, CODEX_CLAUDE_MCP_CLAUDE_PATH: candidate },
+    });
+    expect(health).toMatchObject({
+      status: 'unavailable', cli: { found: false, resolution: 'override', version_status: 'not_executable' },
+      issues: ['cli_not_executable'],
+    });
+  });
+
+  it('shortens an executable under the canonical home even when the supplied home is a symlink', async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'codex-claude-health-home-')));
+    const canonicalHome = join(root, 'canonical-home');
+    const linkedHome = join(root, 'linked-home');
+    await mkdir(canonicalHome);
+    await symlink(canonicalHome, linkedHome);
+    const executable = join(canonicalHome, 'claude');
+    await copyFile(fakeClaude, executable);
+    await chmod(executable, 0o755);
+    const health = await probeClaudeHealth({
+      environment: completeEnvironment({ CODEX_CLAUDE_MCP_CLAUDE_PATH: join(linkedHome, 'claude') }),
+      homeDirectory: linkedHome,
+    });
+    expect(health.cli.path).toBe('~/claude');
+  });
+});

@@ -13,10 +13,49 @@ if (process.argv.includes('--version')) {
   }
   if (process.env.FAKE_VERSION_SCENARIO === 'hang') {
     process.on('SIGTERM', () => undefined);
+    setInterval(() => undefined, 1_000);
     await new Promise(() => undefined);
   }
   process.stdout.write(process.env.FAKE_CLAUDE_VERSION ?? '2.1.0 (Claude Code)\n');
   process.exit(0);
+}
+
+if (process.argv.includes('--help')) {
+  if (process.env.FAKE_HELP_SCENARIO === 'flood') {
+    await new Promise((resolveWrite) => process.stdout.write(Buffer.alloc(65_537, 104), resolveWrite));
+    process.exit(0);
+  }
+  if (process.env.FAKE_HELP_SCENARIO === 'combined-flood') {
+    await Promise.all([
+      new Promise((resolveWrite) => process.stdout.write(Buffer.alloc(40_000, 104), resolveWrite)),
+      new Promise((resolveWrite) => process.stderr.write(Buffer.alloc(40_000, 101), resolveWrite)),
+    ]);
+    process.exit(0);
+  }
+  if (process.env.FAKE_HELP_SCENARIO === 'hang') {
+    process.on('SIGTERM', () => undefined);
+    setInterval(() => undefined, 1_000);
+    await new Promise(() => undefined);
+  }
+  const completeHelp = [
+    '-p, --print', '--input-format stream-json', '--output-format stream-json', '--verbose',
+    '--max-turns', '--no-chrome', '--tools', '--permission-mode', '--model', '--effort',
+    '--resume', '--cloud', '--name', '--mcp-config', '--strict-mcp-config', '--disallowedTools',
+  ].join('\n');
+  process.stdout.write(process.env.FAKE_CLAUDE_HELP ?? completeHelp);
+  process.exit(0);
+}
+
+if (process.argv[2] === 'auth' && process.argv[3] === 'status') {
+  if (process.env.FAKE_AUTH_SCENARIO === 'hang') {
+    process.on('SIGTERM', () => undefined);
+    setInterval(() => undefined, 1_000);
+    await new Promise(() => undefined);
+  }
+  process.stdout.write(process.env.FAKE_AUTH_OUTPUT ?? 'signed in\n');
+  process.stderr.write(process.env.FAKE_AUTH_ERROR ?? '');
+  const exits = { ready: 0, not_ready: 1, expired: 1, unknown: 7 };
+  process.exit(exits[process.env.FAKE_AUTH_SCENARIO ?? 'ready'] ?? 7);
 }
 
 if (!control) process.exit(90);

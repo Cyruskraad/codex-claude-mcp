@@ -7,19 +7,21 @@ const hasNoControlCharacters = (value: string): boolean => [...value].every((cha
   return code > 31 && code !== 127;
 });
 const explicitIdentifier = z.string().min(1).max(512).refine(hasNoControlCharacters).refine((value) => !value.startsWith('-'));
+const STRICT_MESSAGE = 'Unexpected input property.';
+const fixedEnumError: z.ZodErrorMap = () => ({ message: 'Invalid option.' });
 
-export const AccessSchema = z.enum(['inspect', 'write']);
-export const EffortSchema = z.enum(['low', 'medium', 'high', 'xhigh', 'max']);
+export const AccessSchema = z.enum(['inspect', 'write'], { errorMap: fixedEnumError });
+export const EffortSchema = z.enum(['low', 'medium', 'high', 'xhigh', 'max'], { errorMap: fixedEnumError });
 export const ExecutionSchema = z.object({
-  mode: z.enum(['auto', 'sync', 'async']).default('auto'),
+  mode: z.enum(['auto', 'sync', 'async'], { errorMap: fixedEnumError }).default('auto'),
   wait_seconds: z.number().int().min(0).max(45).default(45),
   timeout_seconds: z.number().int().min(30).max(7200).default(1800),
-}).strict();
+}).strict(STRICT_MESSAGE);
 export const SessionSchema = z.discriminatedUnion('mode', [
-  z.object({ mode: z.literal('new') }).strict(),
-  z.object({ mode: z.literal('resume'), session_id: explicitIdentifier }).strict(),
-  z.object({ mode: z.literal('cloud_create'), description: z.string().min(1).max(256).refine(hasNoControlCharacters).optional() }).strict(),
-  z.object({ mode: z.literal('cloud_attach'), target: explicitIdentifier }).strict(),
+  z.object({ mode: z.literal('new') }).strict(STRICT_MESSAGE),
+  z.object({ mode: z.literal('resume'), session_id: explicitIdentifier }).strict(STRICT_MESSAGE),
+  z.object({ mode: z.literal('cloud_create'), description: z.string().min(1).max(256).refine(hasNoControlCharacters).optional() }).strict(STRICT_MESSAGE),
+  z.object({ mode: z.literal('cloud_attach'), target: explicitIdentifier }).strict(STRICT_MESSAGE),
 ]);
 
 /** Public task input, before defaults have been applied. */
@@ -32,7 +34,7 @@ export const ClaudeTaskInputSchema = z.object({
   max_turns: z.number().int().min(1).max(100).default(20),
   session: SessionSchema.default({ mode: 'new' }),
   execution: ExecutionSchema.default({ mode: 'auto', wait_seconds: 45, timeout_seconds: 1800 }),
-}).strict();
+}).strict(STRICT_MESSAGE);
 
 export type ClaudeTaskInput = z.input<typeof ClaudeTaskInputSchema>;
 export type NormalizedClaudeTaskInput = z.output<typeof ClaudeTaskInputSchema>;
@@ -64,7 +66,7 @@ export const ClaudeErrorSchema = z.object({
   message: z.string().min(1).max(1024),
   retryable: z.boolean().optional(),
   subtype: ClaudeTerminalErrorSubtypeSchema.optional(),
-}).strict();
+}).strict(STRICT_MESSAGE);
 export type ClaudeError = z.infer<typeof ClaudeErrorSchema>;
 
 const UsageShape = {
@@ -79,7 +81,7 @@ const UsageShape = {
   is_cache_hit: z.boolean().optional(),
 };
 /** Only aggregate numerical/boolean usage measurements are safe to expose downstream. */
-export const ClaudeUsageSchema = z.object(UsageShape).strict();
+export const ClaudeUsageSchema = z.object(UsageShape).strict(STRICT_MESSAGE);
 export type ClaudeUsage = z.infer<typeof ClaudeUsageSchema>;
 
 export function sanitizeClaudeUsage(value: unknown): ClaudeUsage | undefined {
@@ -113,7 +115,7 @@ export const ClaudeJobSchema = z.object({
   total_cost_usd: z.number().finite().nonnegative().optional(),
   result_preview: z.string().max(4096).optional(),
   error: ClaudeErrorSchema.optional(),
-}).strict().superRefine((job, context) => {
+}).strict(STRICT_MESSAGE).superRefine((job, context) => {
   const terminal = ['succeeded', 'failed', 'cancelled', 'timed_out', 'output_limited', 'orphaned'].includes(job.state);
   if (job.state === 'running') {
     if (!job.started_at) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Running jobs require started_at.' });
