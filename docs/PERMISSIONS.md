@@ -10,9 +10,11 @@ Inspection reduces intended capability but cannot provide a kernel-level confine
 
 ## Write access
 
-Write must be explicitly selected and the canonical workspace must be a real Git worktree. Unlike inspect mode, write mode does not apply the `Read,Glob,Grep` tool allowlist: Claude Code may request file changes, commands, network access, or other open-world actions through its normal permission system. The bridge never passes `--dangerously-skip-permissions`, `--add-dir`, or equivalent bypasses.
+Write must be explicitly selected and the canonical workspace must be a real Git worktree. The bridge passes `--permission-mode acceptEdits`: Claude Code automatically approves file edits and the common filesystem commands it classifies within that validated workspace. Other shell commands and protected paths remain subject to Claude Code's ordinary permission rules, prompts, or refusal. Unlike inspect mode, write mode does not apply the `Read,Glob,Grep` tool allowlist, so Claude may request commands, network access, or other open-world actions. The bridge never passes `--dangerously-skip-permissions`, `bypassPermissions`, `dontAsk`, `--add-dir`, or an equivalent bypass.
 
 Write mode authorizes only the local edits the user requested. A commit, push, network action, publication, or other external effect requires separate authorization naming its target and scope; never infer a remote, branch, account, or destination. The bridge does not commit or push automatically.
+
+`acceptEdits` is a Claude Code permission mode, not an operating-system confinement boundary. It does not broaden the validated workspace, and continuation preserves the source job's access level and exact permission mode; it cannot escalate an inspect job to write.
 
 ## Disabled integrations
 

@@ -12,7 +12,7 @@ Include the affected version, platform, impact, minimal reproduction, and sugges
 
 ## Security boundary
 
-Claude Code Bridge is a permission-aware local process wrapper, not an OS sandbox. Its controls include canonical workspace validation, Git-only write targets, shell-free spawning, stdin prompt transport, strict empty nested-MCP configuration, Chrome disablement, normal Claude permissions, private durable state, output caps, process ownership checks, and bounded redacted diagnostics.
+Claude Code Bridge is a permission-aware local process wrapper, not an OS sandbox. Its controls include canonical workspace validation, Git-only write targets, shell-free spawning, stdin prompt transport, strict empty nested-MCP configuration, Chrome disablement, private durable state, output caps, process ownership checks, and bounded redacted diagnostics. Write access selects Claude Code's `acceptEdits` mode, which auto-approves file edits and Claude-classified common filesystem commands in the validated workspace; other commands and protected paths remain under Claude's permission checks. This local edit mode does not authorize commits, pushes, network actions, or other external effects.
 
 The bridge cannot protect against every behavior of the local Claude Code executable, the operating system, a malicious repository, or the configured model provider. Use OS isolation for untrusted content and review write-mode changes before committing or pushing.
 

@@ -15,6 +15,11 @@ const inspectArgs = [
   '--max-turns', '20', '--no-chrome', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
   '--disallowedTools', 'mcp__*', '--tools', 'Read,Glob,Grep', '--permission-mode', 'plan',
 ];
+const writeArgs = [
+  '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
+  '--max-turns', '20', '--no-chrome', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
+  '--disallowedTools', 'mcp__*', '--permission-mode', 'acceptEdits',
+];
 
 beforeAll(async () => chmod(fakeClaude, 0o755));
 afterEach(() => {
@@ -49,6 +54,20 @@ describe('detached Claude runner integration', () => {
     expect(JSON.stringify(final)).not.toContain('super secret prompt');
     expect(await readFile(store.paths(running.job.id).rawStdout, 'utf8')).not.toContain('super secret prompt');
     await expect(stat(store.paths(running.job.id).request)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('runs write access with exactly acceptEdits and no bypass-style permission', async () => {
+    const { control, store, running } = await setup('success', { access: 'write' });
+    await executeRunner({ store, jobId: running.job.id, runnerToken: 'runner_token', claudePath: fakeClaude });
+    const args = JSON.parse(await readFile(join(control, 'argv.json'), 'utf8')) as string[];
+    expect(args).toEqual(writeArgs);
+    expect(args.filter((argument) => argument === '--permission-mode')).toHaveLength(1);
+    for (const forbidden of [
+      '--tools', '--dangerously-skip-permissions', 'bypassPermissions', 'auto', 'dontAsk', '--accept-edits',
+      '--add-dir', '--chrome',
+    ]) {
+      expect(args).not.toContain(forbidden);
+    }
   });
 
   it('redacts a prompt echoed by Claude before persisting public result or raw output', async () => {

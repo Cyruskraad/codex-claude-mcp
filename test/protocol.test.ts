@@ -1,7 +1,8 @@
-import { spawn } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, realpath, stat, writeFile } from 'node:fs/promises';
+import { execFile, spawn } from 'node:child_process';
+import { access, mkdir, mkdtemp, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { promisify } from 'node:util';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { describe, expect, it } from 'vitest';
@@ -9,6 +10,7 @@ import { describe, expect, it } from 'vitest';
 const repositoryRoot = resolve(import.meta.dirname, '..');
 const serverBundle = join(repositoryRoot, 'plugins/codex-claude-mcp/dist/server.mjs');
 const fakeClaude = join(repositoryRoot, 'test/fixtures/fake-claude.mjs');
+const runFile = promisify(execFile);
 const helpWithoutMaxTurns = [
   '-p, --print', '--input-format stream-json', '--output-format stream-json', '--verbose',
   '--no-chrome', '--tools', '--permission-mode', '--model', '--effort', '--resume', '--cloud',
@@ -487,6 +489,51 @@ describe('built MCP protocol', () => {
       });
       expect(rejectedEscalation.isError).toBe(true);
       expect(JSON.stringify(rejectedEscalation)).not.toContain('do not echo this secret');
+    }, environment, stateRoot);
+  });
+
+  it('runs and continues write work with exactly acceptEdits and no bypass-style permission', async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'codex-claude-protocol-write-')));
+    const workspace = join(root, 'workspace');
+    const control = join(root, 'control');
+    const stateRoot = join(root, 'state');
+    await Promise.all([mkdir(workspace), mkdir(control), mkdir(stateRoot)]);
+    await runFile('git', ['init', '--quiet', workspace]);
+    const environment = {
+      CODEX_CLAUDE_MCP_CLAUDE_PATH: fakeClaude,
+      FAKE_CLAUDE_CONTROL_DIR: control,
+      FAKE_CLAUDE_SCENARIO: 'controlled-write',
+    };
+    const baseWriteArgs = [
+      '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
+      '--max-turns', '20', '--no-chrome', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
+      '--disallowedTools', 'mcp__*', '--permission-mode', 'acceptEdits',
+    ];
+    await withProtocolClient(async (client) => {
+      const submitted = await client.callTool({
+        name: 'claude_task',
+        arguments: { workspace, prompt: 'authorized local edit', access: 'write', execution: { mode: 'sync' } },
+      });
+      const firstJob = structured<{ job: { id: string; state: string; claude_session_id?: string } }>(submitted).job;
+      expect(firstJob).toMatchObject({ state: 'succeeded', claude_session_id: 'sess_fake' });
+      expect(JSON.parse(await readFile(join(control, 'argv.json'), 'utf8'))).toEqual(baseWriteArgs);
+      expect(await readFile(join(workspace, 'claude-controlled-write.txt'), 'utf8')).toBe('controlled write\n');
+      await expect(access(join(root, 'claude-controlled-write.txt'))).rejects.toMatchObject({ code: 'ENOENT' });
+
+      const continued = await client.callTool({
+        name: 'claude_job_continue',
+        arguments: { job_id: firstJob.id, prompt: 'continue authorized local edit', execution: { mode: 'sync' } },
+      });
+      expect(structured<{ job: { state: string } }>(continued).job.state).toBe('succeeded');
+      const continuedArgs = JSON.parse(await readFile(join(control, 'argv.json'), 'utf8')) as string[];
+      expect(continuedArgs).toEqual([...baseWriteArgs, '--resume', 'sess_fake']);
+      expect(continuedArgs.filter((argument) => argument === '--permission-mode')).toHaveLength(1);
+      for (const forbidden of [
+        '--tools', '--dangerously-skip-permissions', 'bypassPermissions', 'auto', 'dontAsk', '--accept-edits',
+        '--add-dir', '--chrome',
+      ]) {
+        expect(continuedArgs).not.toContain(forbidden);
+      }
     }, environment, stateRoot);
   });
 

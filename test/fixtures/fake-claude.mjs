@@ -123,6 +123,10 @@ const success = () => {
 
 switch (scenario) {
   case 'success': success(); break;
+  case 'controlled-write':
+    await writeFile(join(process.cwd(), 'claude-controlled-write.txt'), 'controlled write\n', { mode: 0o600 });
+    success();
+    break;
   case 'malformed': process.stdout.write('{private offending bytes\n'); break;
   case 'auth':
     process.stdout.write(`${JSON.stringify({ type: 'error', error: { type: 'authentication_error', message: 'private identity' } })}\n`);

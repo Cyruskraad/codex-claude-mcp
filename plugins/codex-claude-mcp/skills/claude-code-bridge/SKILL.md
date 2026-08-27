@@ -32,10 +32,10 @@ Use the bridge as a permission-aware local Claude Code process wrapper. Begin a 
 }
 ```
 
-- Default to `inspect`. Use `write` only for an explicitly authorized change in an absolute, existing, real Git worktree. It authorizes local edits only; commit, push, network, or other external effects require separate authorization naming the target and scope. Never infer a remote, branch, or account.
-- Match model and effort to the task; leave them unset for Claude defaults and reserve higher effort for genuinely harder work.
-- Use explicit session IDs or cloud targets. Never infer or request “the most recent” session.
-- Inspection uses bounded read/search and plan permissions. The bridge disables Chrome and nested MCP configuration; never request permission bypasses.
+- Default to `inspect`. Use `write` only for an explicitly authorized change in an absolute, existing, real Git worktree. It selects Claude `acceptEdits`, auto-approving file edits and Claude-classified common filesystem commands in the validated workspace; other commands and protected paths retain Claude permission checks. This is not OS confinement. Commits, pushes, network, and other external effects require separate target-scoped authorization; never infer a remote, branch, or account.
+- Match model/effort to task difficulty; leave them unset for Claude defaults.
+- Use explicit session IDs/cloud targets; never infer “the most recent.”
+- Inspect uses bounded read/search and plan permissions. Chrome/nested MCP remain disabled; never request bypasses.
 
 If a user authorizes edits after an inspect-only job, start a new `claude_task` with `access: "write"`. To retain context, pass the captured `claude_session_id` as `session: { mode: "resume", session_id }`.
 

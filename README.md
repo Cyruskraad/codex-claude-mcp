@@ -10,7 +10,7 @@ The bridge itself runs entirely on your computer. It does not host an MCP servic
 ## Highlights
 
 - Seven focused MCP tools for health, task launch, status, paginated results, continuation, cancellation, and forgetting bridge data.
-- `inspect` access by default with `Read,Glob,Grep` and plan permissions; `write` uses Claude Code's normal permission system and never bypasses it.
+- `inspect` access by default with `Read,Glob,Grep` and plan permissions; `write` uses Claude Code's `acceptEdits` permission mode and never bypasses its permission system.
 - Explicit model aliases or full Claude model IDs and effort levels from `low` through `max`.
 - New, explicitly resumed, cloud-created, and cloud-attached sessions—never an unsafe “continue most recent” operation.
 - Private local state, two-job concurrency, 32 MiB raw-output limits, timeouts, cancellation, orphan recovery, and seven-day terminal-job retention.

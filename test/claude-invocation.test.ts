@@ -21,15 +21,19 @@ describe('Claude invocation builder', () => {
     ]);
   });
 
-  it('adds safe optional model and effort arguments, and lets write use normal permissions', () => {
+  it('uses acceptEdits for write without any bypass-style permission mode or flag', () => {
     const invocation = buildClaudeInvocation(input({ access: 'write', model: 'sonnet', effort: 'high' }));
-    expect(invocation.args).toContain('--model');
-    expect(invocation.args).toContain('sonnet');
-    expect(invocation.args).toContain('--effort');
-    expect(invocation.args).toContain('high');
-    expect(invocation.args).not.toContain('--permission-mode');
+    expect(invocation.args).toEqual([
+      '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
+      '--max-turns', '20', '--no-chrome', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
+      '--disallowedTools', 'mcp__*', '--permission-mode', 'acceptEdits',
+      '--model', 'sonnet', '--effort', 'high',
+    ]);
     expect(invocation.args).not.toContain('--tools');
-    for (const forbidden of ['--continue', '--add-dir', '--chrome', '--dangerously-skip-permissions', 'bypassPermissions', '--accept-edits']) {
+    for (const forbidden of [
+      '--continue', '--add-dir', '--chrome', '--dangerously-skip-permissions',
+      'bypassPermissions', 'auto', 'dontAsk', '--accept-edits',
+    ]) {
       expect(invocation.args).not.toContain(forbidden);
     }
   });

@@ -19,7 +19,7 @@ Start with `claude_health`. It reports discovery, version/feature readiness, san
 }
 ```
 
-Use `access: "write"` only when the user has authorized edits. Write workspaces must be real Git worktrees and still use Claude Code's normal permission system. Local edit authorization does not authorize a commit, push, network action, publication, or other external effect; each requires separate target-scoped authorization.
+Use `access: "write"` only when the user has authorized edits. Write workspaces must be real Git worktrees. The bridge selects Claude Code's `acceptEdits` mode, which auto-approves file edits and Claude-classified common filesystem commands in the validated workspace; other commands and protected paths remain governed by Claude Code's normal permission rules. Local edit authorization does not authorize a commit, push, network action, publication, or other external effect; each requires separate target-scoped authorization.
 
 Model can be a bridge alias (`sonnet`, `opus`, `haiku`, or `fable`) or a full Claude model ID accepted by the installed CLI. Effort can be `low`, `medium`, `high`, `xhigh`, or `max`. Health reports bridge support, not account entitlement.
 

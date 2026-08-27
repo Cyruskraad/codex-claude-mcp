@@ -23,6 +23,8 @@ export function buildClaudeInvocation(input: NormalizedClaudeTaskInput): ClaudeI
 
   if (input.access === 'inspect') {
     args.push('--tools', 'Read,Glob,Grep', '--permission-mode', 'plan');
+  } else {
+    args.push('--permission-mode', 'acceptEdits');
   }
   if (input.model) args.push('--model', input.model);
   if (input.effort) args.push('--effort', input.effort);

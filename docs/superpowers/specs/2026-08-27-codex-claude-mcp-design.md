@@ -21,7 +21,7 @@ Create an independent, local-only Codex plugin that exposes a typed stdio MCP br
 - `claude_job_cancel`
 - `claude_job_forget`
 
-`claude_task` requires an absolute workspace and prompt. It accepts `access: inspect|write`, optional model and effort (`low|medium|high|xhigh|max`), `max_turns` from 1 to 100, explicit new/resume/cloud session settings, and `auto|sync|async` execution with bounded wait and runtime timeouts. Inspect mode limits Claude to `Read,Glob,Grep` with plan permissions. Write mode uses Claude's normal permissions. Both isolate nested MCP and disable Chrome.
+`claude_task` requires an absolute workspace and prompt. It accepts `access: inspect|write`, optional model and effort (`low|medium|high|xhigh|max`), `max_turns` from 1 to 100, explicit new/resume/cloud session settings, and `auto|sync|async` execution with bounded wait and runtime timeouts. Inspect mode limits Claude to `Read,Glob,Grep` with plan permissions. Write mode selects Claude Code's `acceptEdits` permission mode for authorized edits in a validated Git workspace; other commands and protected paths remain under Claude Code's ordinary permission rules. Both isolate nested MCP and disable Chrome.
 
 ## Security and Privacy
 
