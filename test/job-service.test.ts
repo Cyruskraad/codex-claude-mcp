@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { JobService, verifyRunnerOwnership, type RunnerLauncher } from '../src/job-service.js';
 
+const testProcessIdentity = async (pid: number) => ({ state: 'live' as const, birthIdentity: `linux:${pid}` });
+
 async function setup(launcher?: RunnerLauncher, now = new Date('2026-08-27T12:00:00.000Z')) {
   const root = await mkdtemp(join(tmpdir(), 'codex-claude-service-'));
   const workspace = join(root, 'workspace');
@@ -15,6 +17,7 @@ async function setup(launcher?: RunnerLauncher, now = new Date('2026-08-27T12:00
     workspaceValidator: async (path) => ({ canonicalPath: path }),
     launcher: launcher ?? { launch: async () => ({ pid: 10, birthIdentity: 'b10' }) },
     ownershipVerifier: async () => true,
+    processIdentityInspector: testProcessIdentity,
     idGenerator: (() => { let id = 0; return () => `job_${++id}`; })(),
     tokenGenerator: () => 'ownership_token',
   });
@@ -42,9 +45,17 @@ describe('durable job lifecycle service', () => {
       setImmediate(async () => {
         const service = holder.service;
         if (!service) return;
-        const current = await service.store.read(jobId);
-        await service.store.publishTerminal(jobId, current.revision, { state: 'succeeded', result: Buffer.from('done'), exitCode: 0 });
-        service.notifyChanged(jobId);
+        for (;;) {
+          const current = await service.store.read(jobId);
+          if (current.job.state !== 'running') return;
+          try {
+            await service.store.publishTerminal(jobId, current.revision, { state: 'succeeded', result: Buffer.from('done'), exitCode: 0 });
+            service.notifyChanged(jobId);
+            return;
+          } catch (error) {
+            if (!(error instanceof Error && 'code' in error && error.code === 'stale-revision')) throw error;
+          }
+        }
       });
       return { pid: 11, birthIdentity: 'b11' };
     } };
@@ -93,6 +104,7 @@ describe('durable job lifecycle service', () => {
       stateRoot: join(root, 'state'), workspaceValidator: async (path) => ({ canonicalPath: path }),
       launcher: { launch: async ({ jobId }) => { launches.push(jobId); return { pid: 100 + launches.length, birthIdentity: jobId }; } },
       ownershipVerifier: async () => true,
+      processIdentityInspector: testProcessIdentity,
       idGenerator: (() => { let id = 0; return () => `job_${prefix}_${++id}`; })(),
     });
     const left = make('left');
@@ -168,11 +180,71 @@ describe('durable job lifecycle service', () => {
       workspaceValidator: async (path) => ({ canonicalPath: path }),
       launcher: { launch: async ({ jobId }) => { launched.push(jobId); return { pid: 60, birthIdentity: 'new' }; } },
       ownershipVerifier: async (record) => record.job.id === live.job.id,
+      processIdentityInspector: testProcessIdentity,
     });
     await restarted.startup();
     expect((await restarted.getJobStatus(live.job.id)).job.state).toBe('running');
     expect((await restarted.getJobStatus(dead.job.id)).job.state).toBe('orphaned');
     expect((await restarted.getJobStatus('job_3')).job.state).toBe('running');
+  });
+
+  it('uses matching OS-format birth identities across service instances without false orphaning', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'codex-claude-cross-process-identity-'));
+    const workspace = join(root, 'workspace');
+    await mkdir(workspace);
+    const inspector = async (pid: number) => {
+      if (pid === 701) return { state: 'live' as const, birthIdentity: 'linux:554433' };
+      if (pid === 702) return { state: 'live' as const, birthIdentity: 'linux:998877' };
+      return { state: 'live' as const, birthIdentity: 'linux:112233' };
+    };
+    const left = new JobService({
+      stateRoot: join(root, 'state'), workspaceValidator: async (path) => ({ canonicalPath: path }),
+      launcher: { launch: async () => ({ pid: 701, birthIdentity: 'launching:linux:554433' }) },
+      ownershipVerifier: async () => false, processIdentityInspector: inspector,
+      idGenerator: (() => { let id = 0; return () => `job_identity_${++id}`; })(),
+    });
+    await left.startup();
+    const live = await left.submitTask({ workspace, prompt: 'matching identity', execution: { mode: 'async' } });
+    const stale = await left.submitTask({ workspace, prompt: 'mismatched identity', execution: { mode: 'async' } });
+    const staleRecord = await left.store.read(stale.job.id);
+    await left.store.updateRunner(stale.job.id, staleRecord.revision, { pid: 702, birthIdentity: 'launching:linux:554433' });
+    const right = new JobService({
+      stateRoot: left.store.stateRoot, workspaceValidator: async (path) => ({ canonicalPath: path }),
+      launcher: { launch: async () => ({ pid: 703, birthIdentity: 'linux:112233' }) },
+      ownershipVerifier: async () => false, processIdentityInspector: inspector,
+    });
+    await right.startup();
+    expect((await right.getJobStatus(live.job.id)).job.state).toBe('running');
+    expect((await right.getJobStatus(stale.job.id)).job.state).toBe('orphaned');
+    await Promise.all([left.shutdown(), right.shutdown()]);
+  });
+
+  it('retains an uninspectable launch handoff instead of falsely orphaning it', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'codex-claude-unknown-identity-'));
+    const workspace = join(root, 'workspace');
+    await mkdir(workspace);
+    const liveInspector = async (pid: number) => ({
+      state: 'live' as const,
+      birthIdentity: pid === 799 ? 'linux:554433' : 'linux:112233',
+    });
+    const first = new JobService({
+      stateRoot: join(root, 'state'), workspaceValidator: async (path) => ({ canonicalPath: path }),
+      launcher: { launch: async () => ({ pid: 799, birthIdentity: 'launching:linux:554433' }) },
+      ownershipVerifier: async () => false, processIdentityInspector: liveInspector,
+    });
+    await first.startup();
+    const submitted = await first.submitTask({ workspace, prompt: 'unknown identity', execution: { mode: 'async' } });
+    const restarted = new JobService({
+      stateRoot: first.store.stateRoot, workspaceValidator: async (path) => ({ canonicalPath: path }),
+      launcher: { launch: async () => ({ pid: 800, birthIdentity: 'linux:112233' }) },
+      ownershipVerifier: async () => false,
+      processIdentityInspector: async (pid) => pid === 799
+        ? { state: 'unknown' as const }
+        : { state: 'live' as const, birthIdentity: 'linux:112233' },
+    });
+    await restarted.startup();
+    expect((await restarted.getJobStatus(submitted.job.id)).job.state).toBe('running');
+    await Promise.all([first.shutdown(), restarted.shutdown()]);
   });
 
   it('does not count an unverifiable running job as a concurrency slot', async () => {

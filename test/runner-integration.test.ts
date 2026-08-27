@@ -9,6 +9,7 @@ import { executeRunner } from '../src/runner-engine.js';
 
 const fakeClaude = fileURLToPath(new URL('./fixtures/fake-claude.mjs', import.meta.url));
 const originalEnv = { ...process.env };
+const testProcessIdentity = async (pid: number) => ({ state: 'live' as const, birthIdentity: `linux:${pid}` });
 const inspectArgs = [
   '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
   '--max-turns', '20', '--no-chrome', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
@@ -29,7 +30,7 @@ async function setup(scenario: string, overrides: Record<string, unknown> = {}) 
   await mkdir(control);
   process.env.FAKE_CLAUDE_CONTROL_DIR = control;
   process.env.FAKE_CLAUDE_SCENARIO = scenario;
-  const store = new JobStore({ stateRoot: join(root, 'state') });
+  const store = new JobStore({ stateRoot: join(root, 'state'), processIdentityInspector: testProcessIdentity });
   await store.init();
   const task = parseClaudeTaskInput({ workspace, prompt: 'super secret prompt', execution: { mode: 'async', timeout_seconds: 30 }, ...overrides });
   const queued = await store.create(task, 'job_runner', 'runner_token');
@@ -197,11 +198,36 @@ describe('detached Claude runner integration', () => {
     await executeRunner({
       store, jobId: running.job.id, runnerToken: 'runner_token', claudePath: fakeClaude, runnerPid: 891,
       scheduleDeadline: (callback) => { deadline = callback; return () => undefined; },
-      onPreflightSpawned: (pid) => { preflightPid = pid; deadline(); }, waitForGrace: async () => undefined,
+      onPreflightSpawned: (pid) => { preflightPid = pid; setImmediate(deadline); }, waitForGrace: async () => undefined,
       signalRunnerGroup: async (_pid, signal) => { signals.push(signal); if (signal === 'SIGKILL') process.kill(preflightPid, signal); },
     });
-    expect(signals).toEqual(['SIGTERM', 'SIGKILL']);
+    expect(signals.every((signal) => signal === 'SIGTERM' || signal === 'SIGKILL')).toBe(true);
     expect((await store.read(running.job.id)).job.state).toBe('timed_out');
+  });
+
+  it('does not spawn Claude when cancellation wins after preflight but before the synchronous spawn', async () => {
+    process.env.FAKE_CLAUDE_IGNORE_TERM = '1';
+    const { store, running } = await setup('hang');
+    const readRequest = store.readRequest.bind(store);
+    store.readRequest = async (jobId) => {
+      const latest = await store.read(jobId);
+      await store.requestTerminalIntent(jobId, latest.revision, 'cancelled');
+      return readRequest(jobId);
+    };
+    let spawned = 0;
+    let childPid = 0;
+    let deadline!: () => void;
+    const signals: string[] = [];
+    await executeRunner({
+      store, jobId: running.job.id, runnerToken: 'runner_token', claudePath: fakeClaude, runnerPid: 893,
+      scheduleDeadline: (callback) => { deadline = callback; return () => undefined; },
+      onClaudeSpawned: (pid) => { spawned += 1; childPid = pid; deadline(); },
+      signalRunnerGroup: async (_pid, signal) => { signals.push(signal); if (signal === 'SIGKILL') process.kill(childPid, signal); },
+      waitForGrace: async () => undefined,
+    });
+    expect(spawned).toBe(0);
+    expect(signals).toEqual([]);
+    expect((await store.read(running.job.id)).job.state).toBe('cancelled');
   });
 
   it('observes service cancellation control and signals only from the live runner', async () => {

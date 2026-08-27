@@ -1,8 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { spawnSync } from 'node:child_process';
-import { constants, readFileSync } from 'node:fs';
+import { constants } from 'node:fs';
 import {
-  chmod, lstat, mkdir, open, readdir, rename, rm, stat, unlink,
+  chmod, link, lstat, mkdir, open, readdir, rename, rm, stat, unlink,
 } from 'node:fs/promises';
 import { homedir, platform as osPlatform } from 'node:os';
 import { isAbsolute, join } from 'node:path';
@@ -11,11 +10,13 @@ import {
   AccessSchema, ClaudeErrorSchema, ClaudeJobSchema, EffortSchema, ExecutionSchema, SessionSchema,
   type ClaudeError, type ClaudeJob, type JobState, type NormalizedClaudeTaskInput,
 } from './contracts.js';
+import { inspectProcessIdentity, type ProcessIdentityInspector } from './process-identity.js';
 
 export const RESULT_VERSION = 1;
 export const RETENTION_MILLISECONDS = 7 * 24 * 60 * 60 * 1000;
 const JOB_ID_PATTERN = /^job_[A-Za-z0-9_-]{1,123}$/;
 const STAGING_PATTERN = /^\.create-(job_[A-Za-z0-9_-]{1,123})-[a-f0-9]{16}$/;
+const LEASE_TEMP_PATTERN = /^\.(?:scheduler|update)\.lock\.lease-[a-f0-9]{16}$/;
 
 export interface LeaseOwner { token: string; pid: number; birthIdentity: string }
 export type LeaseOwnerVerifier = (owner: LeaseOwner) => Promise<boolean>;
@@ -128,31 +129,11 @@ export interface JobStoreOptions {
   clock?: Clock;
   leaseOwner?: LeaseOwner;
   leaseOwnerVerifier?: LeaseOwnerVerifier;
+  processIdentityInspector?: ProcessIdentityInspector;
   lockWaitMilliseconds?: number;
 }
 
 const leaseOwnerSchema = z.object({ token: z.string().min(1), pid: z.number().int().positive(), birthIdentity: z.string().min(1) }).strict();
-
-async function defaultLeaseOwnerVerifier(owner: LeaseOwner): Promise<boolean> {
-  try { process.kill(owner.pid, 0); } catch (error) { return (error as NodeJS.ErrnoException).code !== 'ESRCH'; }
-  const observed = processBirthIdentity(owner.pid);
-  return observed === undefined || observed === owner.birthIdentity;
-}
-
-function processBirthIdentity(pid: number): string | undefined {
-  if (osPlatform() === 'linux') {
-    try {
-      const value = readFileSync(`/proc/${pid}/stat`, 'utf8');
-      const closing = value.lastIndexOf(')');
-      return value.slice(closing + 2).split(' ')[19];
-    } catch { return undefined; }
-  }
-  if (osPlatform() === 'darwin') {
-    const value = spawnSync('ps', ['-p', String(pid), '-o', 'lstart='], { encoding: 'utf8', timeout: 1_000 });
-    return value.status === 0 ? value.stdout.trim() || undefined : undefined;
-  }
-  return undefined;
-}
 
 async function atomicWrite(path: string, bytes: Buffer | string, mode = 0o600): Promise<void> {
   const temporary = `${path}.tmp-${process.pid}-${randomBytes(8).toString('hex')}`;
@@ -191,8 +172,9 @@ export class JobStore {
   readonly clock: Clock;
   readonly jobsRoot: string;
   readonly cursorKeyPath: string;
-  private readonly leaseOwner: LeaseOwner;
+  private leaseOwner?: LeaseOwner;
   private readonly leaseOwnerVerifier: LeaseOwnerVerifier;
+  private readonly processIdentityInspector: ProcessIdentityInspector;
   private readonly lockWaitMilliseconds: number;
 
   constructor(options: JobStoreOptions = {}) {
@@ -201,11 +183,12 @@ export class JobStore {
     this.clock = options.clock ?? { now: () => new Date() };
     this.jobsRoot = join(this.stateRoot, 'jobs');
     this.cursorKeyPath = join(this.stateRoot, 'cursor.key');
-    this.leaseOwner = options.leaseOwner ?? {
-      token: randomBytes(16).toString('hex'), pid: process.pid,
-      birthIdentity: processBirthIdentity(process.pid) ?? `${process.pid}:${Math.floor(Date.now() - process.uptime() * 1000)}`,
-    };
-    this.leaseOwnerVerifier = options.leaseOwnerVerifier ?? defaultLeaseOwnerVerifier;
+    this.processIdentityInspector = options.processIdentityInspector ?? inspectProcessIdentity;
+    this.leaseOwner = options.leaseOwner;
+    this.leaseOwnerVerifier = options.leaseOwnerVerifier ?? (async (owner) => {
+      const observed = await this.processIdentityInspector(owner.pid);
+      return observed.state === 'unknown' || (observed.state === 'live' && observed.birthIdentity === owner.birthIdentity);
+    });
     this.lockWaitMilliseconds = options.lockWaitMilliseconds ?? 5_000;
   }
 
@@ -222,7 +205,44 @@ export class JobStore {
     };
   }
 
+  private async ensureLeaseOwner(): Promise<LeaseOwner> {
+    if (this.leaseOwner) return this.leaseOwner;
+    const identity = await this.processIdentityInspector(process.pid);
+    if (identity.state !== 'live') throw new JobStoreError('internal-error', 'Current process identity could not be verified.');
+    this.leaseOwner = { token: randomBytes(16).toString('hex'), pid: process.pid, birthIdentity: identity.birthIdentity };
+    return this.leaseOwner;
+  }
+
+  private async cleanupLeaseTemps(directory: string): Promise<void> {
+    let names: string[];
+    try { names = await readdir(directory); } catch { return; }
+    for (const name of names) {
+      if (!LEASE_TEMP_PATTERN.test(name)) continue;
+      const candidate = join(directory, name);
+      try {
+        const metadata = await lstat(candidate);
+        if (!metadata.isFile() || metadata.isSymbolicLink()) continue;
+        const lease = await this.readLease(candidate);
+        if (lease.kind === 'valid' && !(await this.leaseOwnerVerifier(lease.owner))) await unlink(candidate);
+      } catch { /* retain anything unsafe or concurrently removed */ }
+    }
+  }
+
+  private async cleanupLeaseTempsForJobs(): Promise<void> {
+    let names: string[];
+    try { names = await readdir(this.jobsRoot); } catch { return; }
+    for (const name of names) {
+      if (!JOB_ID_PATTERN.test(name)) continue;
+      const directory = join(this.jobsRoot, name);
+      try {
+        const metadata = await lstat(directory);
+        if (metadata.isDirectory() && !metadata.isSymbolicLink()) await this.cleanupLeaseTemps(directory);
+      } catch { /* retain unsafe job directories */ }
+    }
+  }
+
   async init(): Promise<void> {
+    await this.ensureLeaseOwner();
     try {
       const existing = await lstat(this.stateRoot);
       if (!existing.isDirectory() || existing.isSymbolicLink()) throw new JobStoreError('internal-error', 'Private state root is unsafe.');
@@ -253,6 +273,8 @@ export class JobStore {
       } catch (writeError) { if ((writeError as NodeJS.ErrnoException).code !== 'EEXIST') throw writeError; }
       finally { await keyHandle?.close(); }
     }
+    await this.cleanupLeaseTemps(this.stateRoot);
+    await this.cleanupLeaseTempsForJobs();
     await this.cleanupCrashRemnants();
     const warnings = await this.verifyPrivateModes();
     if (warnings.length > 0) throw new JobStoreError('internal-error', 'Private state permissions are ineffective.');
@@ -289,7 +311,7 @@ export class JobStore {
     }
     await mkdir(directory, { mode: 0o700 });
     await chmod(directory, 0o700);
-    await atomicWrite(join(directory, '.owner.json'), JSON.stringify(this.leaseOwner));
+    await atomicWrite(join(directory, '.owner.json'), JSON.stringify(await this.ensureLeaseOwner()));
     const now = this.clock.now().toISOString();
     const storedTask: StoredTask = {
       workspace: task.workspace,
@@ -387,42 +409,52 @@ export class JobStore {
     return this.withLease(join(this.stateRoot, '.scheduler.lock'), action);
   }
 
-  private async readLease(path: string): Promise<LeaseOwner | undefined> {
+  private async readLease(path: string): Promise<{ kind: 'missing' | 'invalid' } | { kind: 'valid'; owner: LeaseOwner }> {
     try {
       const metadata = await lstat(path);
-      if (!metadata.isFile() || metadata.isSymbolicLink()) return undefined;
+      if (!metadata.isFile() || metadata.isSymbolicLink()) return { kind: 'invalid' };
       const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-      try { return leaseOwnerSchema.parse(JSON.parse((await handle.readFile()).toString('utf8'))); }
+      try { return { kind: 'valid', owner: leaseOwnerSchema.parse(JSON.parse((await handle.readFile()).toString('utf8'))) }; }
       finally { await handle.close(); }
-    } catch { return undefined; }
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === 'ENOENT' ? { kind: 'missing' } : { kind: 'invalid' };
+    }
   }
 
   private async withLease<T>(path: string, action: () => Promise<T>): Promise<T> {
-    const owner = { ...this.leaseOwner, token: `${this.leaseOwner.token}:${randomBytes(8).toString('hex')}` };
+    const leaseOwner = await this.ensureLeaseOwner();
+    const owner = { ...leaseOwner, token: `${leaseOwner.token}:${randomBytes(8).toString('hex')}` };
     const deadline = Date.now() + this.lockWaitMilliseconds;
-    let handle;
+    let acquired = false;
     for (;;) {
+      const temporary = `${path}.lease-${randomBytes(8).toString('hex')}`;
       try {
-        handle = await open(path, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
-        await handle.writeFile(JSON.stringify(owner));
-        await handle.sync();
-        break;
+        let handle;
+        try {
+          handle = await open(temporary, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
+          await handle.writeFile(JSON.stringify(owner));
+          await handle.sync();
+        } finally { await handle?.close(); }
+        await link(temporary, path);
+        acquired = true;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
         const existing = await this.readLease(path);
-        if (existing && !(await this.leaseOwnerVerifier(existing))) {
+        if (existing.kind === 'valid' && !(await this.leaseOwnerVerifier(existing.owner))) {
           const replacement = await this.readLease(path);
-          if (replacement?.token === existing.token) await unlink(path).catch(() => undefined);
+          if (replacement.kind === 'valid' && replacement.owner.token === existing.owner.token) await unlink(path).catch(() => undefined);
           continue;
         }
         if (Date.now() >= deadline) throw new JobStoreError('lock-unavailable', 'Private state lease is unavailable.');
         await new Promise<void>((resolve) => setTimeout(resolve, 2));
+      } finally {
+        await unlink(temporary).catch(() => undefined);
       }
+      if (acquired) break;
     }
     try { return await action(); } finally {
-      await handle.close();
       const replacement = await this.readLease(path);
-      if (replacement?.token === owner.token) await unlink(path).catch(() => undefined);
+      if (replacement.kind === 'valid' && replacement.owner.token === owner.token) await unlink(path).catch(() => undefined);
     }
   }
 

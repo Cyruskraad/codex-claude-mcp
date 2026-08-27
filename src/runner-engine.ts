@@ -81,6 +81,8 @@ export async function executeRunner(options: ExecuteRunnerOptions): Promise<void
   let child: ChildProcess | undefined;
   let reaped = true;
   let stopping: Promise<void> | undefined;
+  let stopRequested = false;
+  let phase: 'preflight' | 'claude' | 'idle' = 'idle';
   let intent: TerminalIntent | undefined;
   let rawByteCount = 0;
   let outputStopped = false;
@@ -92,6 +94,7 @@ export async function executeRunner(options: ExecuteRunnerOptions): Promise<void
   };
   const requestStop = (requested: TerminalIntent): Promise<void> => {
     if (stopping) return stopping;
+    stopRequested = true;
     intent = requested;
     stopping = (async () => {
       const latest = await store.read(options.jobId);
@@ -99,7 +102,7 @@ export async function executeRunner(options: ExecuteRunnerOptions): Promise<void
       if (!control.terminalIntent) await store.requestTerminalIntent(options.jobId, latest.revision, requested);
       else intent = control.terminalIntent;
       stopOutput();
-      if (reaped) return;
+      if (phase === 'idle' || reaped) return;
       await signalRunnerGroup(runnerPid, 'SIGTERM');
       await waitForGrace();
       if (!reaped) await signalRunnerGroup(runnerPid, 'SIGKILL');
@@ -121,11 +124,11 @@ export async function executeRunner(options: ExecuteRunnerOptions): Promise<void
     child = spawn(claudePath, args, spawnOptions);
     reaped = false;
     const active = child;
-    if (captureVersion && active.pid) options.onPreflightSpawned?.(active.pid);
     const close = new Promise<ProcessResult>((resolve) => {
       active.once('error', () => { reaped = true; resolve({ code: null, signal: null }); });
       active.once('close', (code, signal) => { reaped = true; resolve({ code, signal }); });
     });
+    if (captureVersion && active.pid) options.onPreflightSpawned?.(active.pid);
     if (captureVersion) {
       const consume = (chunk: Buffer) => {
         if (outputStopped) return;
@@ -142,10 +145,13 @@ export async function executeRunner(options: ExecuteRunnerOptions): Promise<void
 
   try {
     let version;
+    phase = 'preflight';
     try { version = await runChild(['--version'], { shell: false, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true }, true); }
     catch { await safelyPublishFailure(store, options.jobId, 'claude-not-found'); return; }
     await stopping;
-    if (intent) { await store.finalizeTerminalIntent(options.jobId); return; }
+    if (intent || stopRequested) { await store.finalizeTerminalIntent(options.jobId); return; }
+    let control = await store.readControl(options.jobId);
+    if (control.terminalIntent) { await store.finalizeTerminalIntent(options.jobId); return; }
     if (version.result.code === null) { await safelyPublishFailure(store, options.jobId, 'claude-not-found'); return; }
     if (version.result.code !== 0 || !supportedClaudeVersion(version.version)) { await safelyPublishFailure(store, options.jobId, 'claude-unsupported'); return; }
     let privatePrompt: string;
@@ -154,11 +160,15 @@ export async function executeRunner(options: ExecuteRunnerOptions): Promise<void
     const invocation = buildClaudeInvocation({ ...record.task, prompt: privatePrompt });
     await store.removeRequest(options.jobId);
 
+    control = await store.readControl(options.jobId);
+    if (stopRequested || control.terminalIntent) { await store.finalizeTerminalIntent(options.jobId); return; }
+
     let parseError = false;
     let lineBuffer = Buffer.alloc(0);
     const accumulator = createClaudeStreamAccumulator();
     let processResult: ProcessResult;
     try {
+      phase = 'claude';
       const running = runChild(invocation.args, { cwd: record.task.workspace, detached: false, shell: false, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
       if (!child?.pid) { await safelyPublishFailure(store, options.jobId, 'claude-failed'); return; }
       const active = child;
@@ -201,7 +211,7 @@ export async function executeRunner(options: ExecuteRunnerOptions): Promise<void
     }
     const safeResult = snapshot.result.split(privatePrompt).join('[redacted prompt]'); privatePrompt = '';
     await store.publishTerminal(options.jobId, record.revision, { state: 'succeeded', result: Buffer.from(safeResult), exitCode: processResult.code, signal: processResult.signal, sessionId, usage: snapshot.usage, totalCostUsd: snapshot.totalCostUsd });
-  } finally { cancelDeadline(); clearInterval(poll); process.off('SIGTERM', sigtermHandler); }
+  } finally { phase = 'idle'; cancelDeadline(); clearInterval(poll); process.off('SIGTERM', sigtermHandler); }
 }
 
 function publicProgress(accumulator: ClaudeStreamAccumulator, prompt: string): { sessionId?: string; progressTail: string[] } {

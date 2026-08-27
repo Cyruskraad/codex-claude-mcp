@@ -152,3 +152,49 @@ Final commands and their exact fresh output are appended after the final rerun b
 - `npm run build` — exit 0; Node 20 production bundles `runner.mjs` and `server.mjs` built successfully.
 - `npm run validate` — exit 0; canonical envelope `{"ok":true,"data":{}}`.
 - `npm run noodle:test` — the sandboxed attempt exited 1 with `listen EPERM: operation not permitted 127.0.0.1`; rerun with approved loopback-only permission exited 0 and returned `{"ok":true,"data":{"endpoint":"http://127.0.0.1:57562/o/local/codex-claude-mcp-authoring/dev/mcp","protocol":{"era":"modern","version":"2026-07-28"},"tools":["authoring_status"]}}`.
+
+## Fix round 2: atomic lease publication and spawn-window closure
+
+### RED evidence
+
+- The new malformed-authoritative-lease regression failed before the repair because a recognized unpublished lease temp remained after startup cleanup. This exposed that cleanup was absent, while the prior `O_EXCL` lock itself could also become authoritative before its JSON owner was complete.
+- The deterministic preflight-to-Claude cancellation regression used a TERM-resistant fake Claude and a private-request barrier. Before the repair it timed out: cancellation was recorded after preflight, yet Claude still spawned into the gap.
+- Focused two-service scheduling exposed a follow-on cleanup race in the first implementation: concurrent `init()` could delete a live unpublished lease temp before its `link`, producing `ENOENT` at the link. Cleanup now removes only complete, recognized lease temp records whose owners are proven dead.
+
+### Architecture changes
+
+- Lease acquisition now writes and fsyncs a private same-directory owner temp, atomically publishes it with `link(temp, lock)`, then unlinks the temp. A crash before link leaves no authoritative lock; a malformed or partial authoritative path fails closed and is never reclaimed merely by age.
+- Lease release remains token-checked. Reclamation double-reads and removes only a stable, complete lease owned by a process proven dead. Recognized unpublished temps are similarly removed only for proven-dead owners; malformed or live/replaced entries remain fail-closed.
+- Added `src/process-identity.ts`: Linux identities are robust `/proc/<pid>/stat` start ticks (`linux:<ticks>`); macOS uses shell-free `ps` start time (`darwin:<time>`). Unknown inspection is never treated as dead. Job-store lease liveness, service launch handoff, detached runner birth recording, and runner verification use this shared format. `src/job-store.ts` and `src/job-service.ts` contain no `process.kill(` calls.
+- Runner state now records `stopRequested` before awaits, installs child close handling before test hooks, rechecks durable terminal control after preflight and immediately before the synchronous Claude spawn, and finalizes without spawning when intent wins. Claude remains non-detached inside the detached runner group; no Claude PGID or service signal path was reintroduced.
+
+### Regression evidence
+
+- Lease tests cover valid dead/live/replaced ownership, malformed authoritative record retention, stale unpublished-temp cleanup, partial/malformed fail-closed behavior, and two-service concurrent acquisition.
+- The spawn-window test proves a cancellation written after preflight produces zero Claude spawns and zero runner signals even with a TERM-resistant fixture. The existing active-child timeout test still proves durable intent followed by TERM then KILL.
+- Cross-service identity coverage uses distinct injected Linux-format birth identities: matching `linux:554433` remains running; mismatched `linux:998877` is orphaned. Production grep: `rg -n "process\\.kill\\(" src/job-service.ts src/job-store.ts` produced no matches.
+
+### Final fresh command outputs
+
+- Focused Task 3: `npm test -- test/job-store.test.ts test/job-service.test.ts test/runner-integration.test.ts test/runner-main.test.ts test/contracts.test.ts` — exit 0; 5 files, 91 tests passed.
+- Full: `npm test` — exit 0; 10 files, 123 tests passed.
+- Coverage: `npm run test:coverage` — exit 0; 123 tests passed; 92.71% statements, 92.72% functions, 92.71% lines, and 85.26% branches (gates 90/90/90/85).
+- `npm run typecheck`, `npm run lint`, and `npm run build` — all exit 0; Node 20 runner/server bundles built.
+- `npm run validate` — exit 0; `{"ok":true,"data":{}}`.
+- `npm run noodle:test` initially exited 1 with sandbox `listen EPERM 127.0.0.1`; the approved loopback-only rerun exited 0 with modern protocol `2026-07-28` and `authoring_status`.
+
+### Remaining live-only concerns
+
+- The process-identity inspector intentionally fails closed when `/proc`/`ps` cannot establish an identity. Its real macOS/Linux/WSL2 behavior and actual process-group delivery still require an unsandboxed live verification.
+- No authenticated Claude invocation was made; live CLI/version/auth compatibility remains outside this local fake-Claude evidence.
+
+### Final verification correction
+
+The final round-two regression also covers an uninspectable *foreign* launch handoff: the service can still identify itself for lease ownership, but an unknown runner identity remains `running` and consumes a slot rather than being falsely orphaned. Known dead or birth-mismatched identities remain reclaimable. Concurrent terminal retention cleanup now treats an already-removed job as complete.
+
+- Focused Task 3: `npm test -- test/job-store.test.ts test/job-service.test.ts test/runner-integration.test.ts` — exit 0; 3 files, 60 tests passed.
+- Full: `npm test` — exit 0; 10 files, 124 tests passed.
+- Coverage: `npm run test:coverage` — exit 0; 124 tests passed; 92.86% statements, 92.72% functions, 92.86% lines, and 85.47% branches (gates 90/90/90/85).
+- `npm run typecheck`, `npm run lint`, and `npm run build` — exit 0; Node 20 runner/server bundles built.
+- `npm run validate` — exit 0; `{"ok":true,"data":{}}`.
+- `npm run noodle:test` initially exited 1 with sandbox `listen EPERM 127.0.0.1`; approved loopback-only rerun exited 0 with `{"ok":true,"data":{"endpoint":"http://127.0.0.1:59268/o/local/codex-claude-mcp-authoring/dev/mcp","protocol":{"era":"modern","version":"2026-07-28"},"tools":["authoring_status"]}}`.

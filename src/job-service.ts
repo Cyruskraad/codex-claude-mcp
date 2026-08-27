@@ -11,12 +11,12 @@ import {
 import {
   JobStore, JobStoreError, RETENTION_MILLISECONDS, type Clock, type InternalJobRecord,
 } from './job-store.js';
+import { currentProcessIdentity, inspectProcessIdentity, type ProcessIdentityInspector } from './process-identity.js';
 import { validateWorkspace, type ValidatedWorkspace } from './workspace-policy.js';
 
 const MAX_CONCURRENT_JOBS = 2;
 const RESULT_PAGE_BYTES = 65_536;
 const TERMINAL_STATES = new Set(['succeeded', 'failed', 'cancelled', 'timed_out', 'output_limited', 'orphaned']);
-const CURRENT_PROCESS_BIRTH = `${process.pid}:${Math.floor(Date.now() - process.uptime() * 1000)}`;
 
 export interface JobStatusView { job: ClaudeJob; progress_tail: string[] }
 export interface JobResultPage extends JobStatusView { result: string; next_cursor?: string }
@@ -32,6 +32,7 @@ export interface JobServiceOptions {
   workspaceValidator?: (path: string, options: { access: 'inspect' | 'write' }) => Promise<ValidatedWorkspace>;
   launcher?: RunnerLauncher;
   ownershipVerifier?: OwnershipVerifier;
+  processIdentityInspector?: ProcessIdentityInspector;
   idGenerator?: () => string;
   tokenGenerator?: () => string;
   supervisorIntervalMilliseconds?: number;
@@ -63,22 +64,7 @@ async function spawnCapture(command: string, args: string[]): Promise<string> {
   });
 }
 
-async function processBirthIdentity(pid: number): Promise<string | undefined> {
-  if (platform() === 'linux') {
-    try {
-      const statText = await readFile(`/proc/${pid}/stat`, 'utf8');
-      const closing = statText.lastIndexOf(')');
-      return statText.slice(closing + 2).split(' ')[19];
-    } catch { return undefined; }
-  }
-  if (platform() === 'darwin') {
-    const value = await spawnCapture('ps', ['-p', String(pid), '-o', 'lstart=']);
-    return value.trim() || undefined;
-  }
-  return undefined;
-}
-
-export async function verifyRunnerOwnership(record: InternalJobRecord): Promise<boolean> {
+export async function verifyRunnerOwnership(record: InternalJobRecord, inspector: ProcessIdentityInspector = inspectProcessIdentity): Promise<boolean> {
   const pid = record.runner.pid;
   if (!pid) return false;
   let command = '';
@@ -88,11 +74,15 @@ export async function verifyRunnerOwnership(record: InternalJobRecord): Promise<
     command = await spawnCapture('ps', ['-p', String(pid), '-o', 'command=']);
   } else return false;
   if (!command.includes(record.runner.token) || !command.includes(record.job.id)) return false;
-  if (record.runner.birthIdentity) return await processBirthIdentity(pid) === record.runner.birthIdentity;
+  if (record.runner.birthIdentity) {
+    const observed = await inspector(pid);
+    return observed.state === 'live' && observed.birthIdentity === record.runner.birthIdentity;
+  }
   return true;
 }
 
 class DetachedRunnerLauncher implements RunnerLauncher {
+  constructor(private readonly inspector: ProcessIdentityInspector) {}
   async launch(request: RunnerLaunchRequest): Promise<RunnerLaunchResult> {
     const runnerPath = fileURLToPath(new URL('./runner.mjs', import.meta.url));
     const child = spawn(process.execPath, [
@@ -100,7 +90,9 @@ class DetachedRunnerLauncher implements RunnerLauncher {
     ], { detached: true, shell: false, stdio: 'ignore', windowsHide: true });
     if (!child.pid) throw new Error('Runner did not start.');
     child.unref();
-    return { pid: child.pid, birthIdentity: await processBirthIdentity(child.pid) };
+    const identity = await this.inspector(child.pid);
+    if (identity.state !== 'live') throw new Error('Runner identity could not be verified.');
+    return { pid: child.pid, birthIdentity: identity.birthIdentity };
   }
 }
 
@@ -110,6 +102,8 @@ export class JobService {
   private readonly workspaceValidator: NonNullable<JobServiceOptions['workspaceValidator']>;
   private readonly launcher: RunnerLauncher;
   private ownershipVerifier: OwnershipVerifier;
+  private readonly processIdentityInspector: ProcessIdentityInspector;
+  private ownProcessBirthIdentity?: string;
   private readonly idGenerator: () => string;
   private readonly tokenGenerator: () => string;
   private readonly events = new EventEmitter();
@@ -120,10 +114,11 @@ export class JobService {
   private acceptance: Promise<void> = Promise.resolve();
 
   constructor(options: JobServiceOptions = {}) {
-    this.store = new JobStore({ stateRoot: options.stateRoot, clock: options.clock });
+    this.processIdentityInspector = options.processIdentityInspector ?? inspectProcessIdentity;
+    this.store = new JobStore({ stateRoot: options.stateRoot, clock: options.clock, processIdentityInspector: this.processIdentityInspector });
     this.clock = options.clock ?? this.store.clock;
     this.workspaceValidator = options.workspaceValidator ?? ((path, policy) => validateWorkspace(path, policy));
-    this.launcher = options.launcher ?? new DetachedRunnerLauncher();
+    this.launcher = options.launcher ?? new DetachedRunnerLauncher(this.processIdentityInspector);
     this.ownershipVerifier = options.ownershipVerifier ?? verifyRunnerOwnership;
     this.idGenerator = options.idGenerator ?? (() => `job_${randomBytes(18).toString('base64url')}`);
     this.tokenGenerator = options.tokenGenerator ?? (() => randomBytes(24).toString('base64url'));
@@ -132,14 +127,21 @@ export class JobService {
 
   setOwnershipVerifier(verifier: OwnershipVerifier): void { this.ownershipVerifier = verifier; }
 
-  private async runnerIsLive(record: InternalJobRecord): Promise<boolean> {
+  private async ownBirthIdentity(): Promise<string> {
+    if (this.ownProcessBirthIdentity) return this.ownProcessBirthIdentity;
+    const identity = await currentProcessIdentity(this.processIdentityInspector);
+    if (!identity) throw new JobStoreError('internal-error', 'Current process identity could not be verified.');
+    this.ownProcessBirthIdentity = identity;
+    return identity;
+  }
+
+  private async runnerLiveness(record: InternalJobRecord): Promise<'live' | 'dead' | 'unknown'> {
+    if (!record.runner.pid) return 'dead';
+    const observed = await this.processIdentityInspector(record.runner.pid);
+    if (observed.state !== 'live') return observed.state;
     const launching = record.runner.birthIdentity?.match(/^launching:(.+)$/);
-    if (launching && record.runner.pid) {
-      if (record.runner.pid === process.pid) return launching[1] === CURRENT_PROCESS_BIRTH;
-      const observed = await processBirthIdentity(record.runner.pid);
-      return observed !== undefined && observed === launching[1];
-    }
-    return this.ownershipVerifier(record);
+    if (launching) return observed.birthIdentity === launching[1] ? 'live' : 'dead';
+    return (await this.ownershipVerifier(record)) ? 'live' : 'dead';
   }
 
   async startup(): Promise<void> {
@@ -147,14 +149,14 @@ export class JobService {
     await this.cleanup();
     for (const record of await this.store.list()) {
       if (record.job.state !== 'running') continue;
-      const live = await this.runnerIsLive(record);
+      const liveness = await this.runnerLiveness(record);
       const control = await this.store.readControl(record.job.id);
       if (control.terminalIntent) {
-        if (live) continue;
+        if (liveness !== 'dead') continue;
         await this.store.finalizeTerminalIntent(record.job.id);
         continue;
       }
-      if (live) continue;
+      if (liveness !== 'dead') continue;
       try {
         await this.store.publishTerminal(record.job.id, record.revision, {
           state: 'orphaned', result: Buffer.alloc(0), error: { code: 'orphaned', message: 'Claude runner ownership could not be verified.' },
@@ -220,15 +222,19 @@ export class JobService {
       const launches: InternalJobRecord[] = [];
       let running = 0;
       for (const record of records.filter((candidate) => candidate.job.state === 'running')) {
-        const live = await this.runnerIsLive(record);
-        const control = await this.store.readControl(record.job.id);
-        if (control.terminalIntent) {
-          if (live) running += 1;
-          else await this.store.finalizeTerminalIntent(record.job.id);
-        } else if (live) running += 1;
-        else await this.store.publishTerminal(record.job.id, record.revision, {
-          state: 'orphaned', result: Buffer.alloc(0), error: { code: 'orphaned', message: 'Claude runner ownership could not be verified.' },
-        });
+        try {
+          const liveness = await this.runnerLiveness(record);
+          const control = await this.store.readControl(record.job.id);
+          if (control.terminalIntent) {
+            if (liveness !== 'dead') running += 1;
+            else await this.store.finalizeTerminalIntent(record.job.id);
+          } else if (liveness !== 'dead') running += 1;
+          else await this.store.publishTerminal(record.job.id, record.revision, {
+            state: 'orphaned', result: Buffer.alloc(0), error: { code: 'orphaned', message: 'Claude runner ownership could not be verified.' },
+          });
+        } catch (error) {
+          if (!(error instanceof JobStoreError && error.code === 'stale-revision')) throw error;
+        }
       }
       for (const queued of records.filter((record) => record.job.state === 'queued')) {
         const control = await this.store.readControl(queued.job.id);
@@ -237,7 +243,7 @@ export class JobService {
           continue;
         }
         if (running >= MAX_CONCURRENT_JOBS) break;
-        launches.push(await this.store.claim(queued.job.id, queued.revision, { pid: process.pid, birthIdentity: `launching:${CURRENT_PROCESS_BIRTH}` }));
+        launches.push(await this.store.claim(queued.job.id, queued.revision, { pid: process.pid, birthIdentity: `launching:${await this.ownBirthIdentity()}` }));
         running += 1;
       }
       return launches;
@@ -360,7 +366,13 @@ export class JobService {
     const cutoff = this.clock.now().getTime() - RETENTION_MILLISECONDS;
     for (const record of await this.store.list()) {
       if (!TERMINAL_STATES.has(record.job.state) || !record.job.finished_at) continue;
-      if (new Date(record.job.finished_at).getTime() < cutoff) await this.store.remove(record.job.id);
+      if (new Date(record.job.finished_at).getTime() < cutoff) {
+        try {
+          await this.store.remove(record.job.id);
+        } catch (error) {
+          if (!(error instanceof JobStoreError && error.code === 'job-not-found')) throw error;
+        }
+      }
     }
   }
 }

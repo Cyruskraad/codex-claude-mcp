@@ -7,12 +7,13 @@ import { parseClaudeTaskInput } from '../src/contracts.js';
 import { JobStore, resolveStateRoot } from '../src/job-store.js';
 
 const clock = { now: () => new Date('2026-08-27T12:00:00.000Z') };
+const testProcessIdentity = async (pid: number) => ({ state: 'live' as const, birthIdentity: `linux:${pid}` });
 
 async function setup() {
   const root = await mkdtemp(join(tmpdir(), 'codex-claude-store-'));
   const workspace = join(root, 'workspace');
   await mkdir(workspace);
-  const store = new JobStore({ stateRoot: join(root, 'state'), clock });
+  const store = new JobStore({ stateRoot: join(root, 'state'), clock, processIdentityInspector: testProcessIdentity });
   await store.init();
   const task = parseClaudeTaskInput({ workspace, prompt: 'private prompt' });
   return { root, workspace, store, task };
@@ -131,17 +132,17 @@ describe('private durable job store', () => {
     const target = join(root, 'target');
     await mkdir(target);
     await symlink(target, join(root, 'state'));
-    await expect(new JobStore({ stateRoot: join(root, 'state') }).init()).rejects.toMatchObject({ code: 'internal-error' });
+    await expect(new JobStore({ stateRoot: join(root, 'state'), processIdentityInspector: testProcessIdentity }).init()).rejects.toMatchObject({ code: 'internal-error' });
 
     const safeState = join(root, 'safe-state');
     await mkdir(safeState, { mode: 0o700 });
     await symlink(target, join(safeState, 'jobs'));
-    await expect(new JobStore({ stateRoot: safeState }).init()).rejects.toMatchObject({ code: 'internal-error' });
+    await expect(new JobStore({ stateRoot: safeState, processIdentityInspector: testProcessIdentity }).init()).rejects.toMatchObject({ code: 'internal-error' });
 
     const keyState = join(root, 'key-state');
     await mkdir(keyState, { mode: 0o700 });
     await mkdir(join(keyState, 'cursor.key'), { mode: 0o700 });
-    await expect(new JobStore({ stateRoot: keyState }).init()).rejects.toMatchObject({ code: 'internal-error' });
+    await expect(new JobStore({ stateRoot: keyState, processIdentityInspector: testProcessIdentity }).init()).rejects.toMatchObject({ code: 'internal-error' });
   });
 
   it('recovers only proven-dead owner locks and never breaks a live or replacement lock', async () => {
@@ -157,6 +158,25 @@ describe('private durable job store', () => {
     await writeFile(join(staleStore.stateRoot, '.scheduler.lock'), JSON.stringify({ token: 'live', pid: 2, birthIdentity: 'live-birth' }), { mode: 0o600 });
     await expect(staleStore.withSchedulerLease(async () => 'wrong')).rejects.toMatchObject({ code: 'lock-unavailable' });
     expect(JSON.parse(await readFile(join(staleStore.stateRoot, '.scheduler.lock'), 'utf8'))).toMatchObject({ token: 'live' });
+  });
+
+  it('treats malformed authoritative leases as fail-closed while removing only recognized unpublished lease temps', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'codex-claude-lease-publication-'));
+    const stateRoot = join(root, 'state');
+    const store = new JobStore({
+      stateRoot, lockWaitMilliseconds: 25,
+      leaseOwner: { token: 'self', pid: 1, birthIdentity: 'linux:100' },
+      leaseOwnerVerifier: async () => false,
+    });
+    await store.init();
+    const lock = join(stateRoot, '.scheduler.lock');
+    const temp = `${lock}.lease-${'a'.repeat(16)}`;
+    await writeFile(lock, '{partial owner', { mode: 0o600 });
+    await writeFile(temp, JSON.stringify({ token: 'unpublished', pid: 2, birthIdentity: 'linux:200' }), { mode: 0o600 });
+    await store.init();
+    await expect(lstat(temp)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(store.withSchedulerLease(async () => 'must not acquire')).rejects.toMatchObject({ code: 'lock-unavailable' });
+    expect(await readFile(lock, 'utf8')).toBe('{partial owner');
   });
 
   it('cleans proven-dead owned staging prompts and terminal request remnants but retains unrelated directories', async () => {
