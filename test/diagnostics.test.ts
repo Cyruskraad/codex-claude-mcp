@@ -67,4 +67,10 @@ describe('diagnostic sanitization', () => {
       expect(redactDiagnostic(value)).toBe(expected);
     }
   });
+
+  it('uses stable fallbacks for non-errors, unknown codes, empty messages, and an empty injected home', () => {
+    expect(safeErrorSummary(null)).toEqual({ code: 'internal-error', message: 'An internal error occurred.' });
+    expect(safeErrorSummary({ code: 'future-code', message: '' })).toEqual({ code: 'internal-error', message: 'An internal error occurred.' });
+    expect(redactDiagnostic('plain diagnostic', { homeDirectory: '' })).toBe('plain diagnostic');
+  });
 });

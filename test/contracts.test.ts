@@ -103,7 +103,8 @@ describe('Claude task contracts', () => {
     ]);
     expect(ClaudeJobSchema.parse({
       id: 'job_1', state: 'succeeded', created_at: '2026-08-27T12:00:00.000Z',
-      updated_at: '2026-08-27T12:00:01.000Z', workspace: '/repo', access: 'inspect', max_turns: 20,
+      updated_at: '2026-08-27T12:00:01.000Z', started_at: '2026-08-27T12:00:00.000Z', finished_at: '2026-08-27T12:00:01.000Z',
+      workspace: '/repo', access: 'inspect', max_turns: 20,
     })).toMatchObject({ id: 'job_1', state: 'succeeded' });
     expect(ClaudeErrorCodeSchema.options).toEqual([
       'invalid-input', 'invalid-workspace', 'forbidden-workspace', 'write-requires-git',
@@ -111,6 +112,22 @@ describe('Claude task contracts', () => {
       'job-not-found', 'job-not-terminal', 'malformed-stream', 'claude-failed', 'cancelled',
       'timed-out', 'output-limited', 'orphaned', 'internal-error',
     ]);
+  });
+
+  it('enforces running and terminal timestamp/error invariants', () => {
+    const base = {
+      id: 'job_1', created_at: '2026-08-27T12:00:00.000Z', updated_at: '2026-08-27T12:00:01.000Z',
+      workspace: '/repo', access: 'inspect', max_turns: 20,
+    };
+    expect(() => ClaudeJobSchema.parse({ ...base, state: 'running' })).toThrow();
+    expect(() => ClaudeJobSchema.parse({ ...base, state: 'running', started_at: base.created_at, finished_at: base.updated_at })).toThrow();
+    expect(() => ClaudeJobSchema.parse({ ...base, state: 'succeeded' })).toThrow();
+    expect(() => ClaudeJobSchema.parse({ ...base, state: 'succeeded', finished_at: base.updated_at, error: { code: 'internal-error', message: 'bad' } })).toThrow();
+    expect(() => ClaudeJobSchema.parse({ ...base, state: 'cancelled', finished_at: base.updated_at })).toThrow();
+    expect(ClaudeJobSchema.parse({ ...base, state: 'cancelled', finished_at: base.updated_at, error: { code: 'cancelled', message: 'Claude job was cancelled.' } }).started_at).toBeUndefined();
+    expect(() => ClaudeJobSchema.parse({ ...base, state: 'queued', started_at: base.created_at })).toThrow();
+    expect(() => ClaudeJobSchema.parse({ ...base, state: 'failed', finished_at: base.updated_at, error: { code: 'claude-failed', message: 'failed' } })).toThrow();
+    expect(() => ClaudeJobSchema.parse({ ...base, state: 'timed_out', started_at: base.created_at, finished_at: base.updated_at, error: { code: 'cancelled', message: 'wrong stable code' } })).toThrow();
   });
 
   it('rejects unsafe usage metadata rather than persisting arbitrary scalar fields', () => {

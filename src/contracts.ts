@@ -113,7 +113,37 @@ export const ClaudeJobSchema = z.object({
   total_cost_usd: z.number().finite().nonnegative().optional(),
   result_preview: z.string().max(4096).optional(),
   error: ClaudeErrorSchema.optional(),
-}).strict();
+}).strict().superRefine((job, context) => {
+  const terminal = ['succeeded', 'failed', 'cancelled', 'timed_out', 'output_limited', 'orphaned'].includes(job.state);
+  if (job.state === 'running') {
+    if (!job.started_at) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Running jobs require started_at.' });
+    if (job.finished_at) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Running jobs forbid finished_at.' });
+  }
+  if (job.state === 'queued' && job.started_at) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'Queued jobs forbid started_at.' });
+  }
+  if (terminal && !job.finished_at) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'Terminal jobs require finished_at.' });
+  }
+  if (!terminal && job.finished_at) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'Nonterminal jobs forbid finished_at.' });
+  }
+  if (job.state === 'succeeded' && job.error) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'Successful jobs forbid errors.' });
+  }
+  if (terminal && job.state !== 'succeeded' && !job.error) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'Unsuccessful terminal jobs require an error.' });
+  }
+  if (terminal && job.state !== 'cancelled' && !job.started_at) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'Terminal jobs reached from running require started_at.' });
+  }
+  const stableStateErrors: Partial<Record<JobState, ClaudeErrorCode>> = {
+    cancelled: 'cancelled', timed_out: 'timed-out', output_limited: 'output-limited', orphaned: 'orphaned',
+  };
+  if (stableStateErrors[job.state] && job.error?.code !== stableStateErrors[job.state]) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'Terminal state requires its stable error code.' });
+  }
+});
 export type ClaudeJob = z.infer<typeof ClaudeJobSchema>;
 
 export class ClaudeContractError extends Error {

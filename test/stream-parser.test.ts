@@ -88,4 +88,31 @@ describe('incremental Claude stream parser', () => {
       expect(String(error)).not.toContain(malformed);
     }
   });
+
+  it('ignores structurally irrelevant event fields and invalid optional metadata', () => {
+    const accumulator = createClaudeStreamAccumulator();
+    for (const line of [
+      'null', '[]', '{}', '{"type":"system","subtype":"other","session_id":"ignored"}',
+      '{"type":"assistant","message":null}',
+      '{"type":"assistant","message":{"content":"not-an-array"}}',
+      '{"type":"stream_event","event":{"type":"other"}}',
+      '{"type":"progress","message":42}',
+      '{"type":"result","subtype":"success","result":42,"session_id":"","total_cost_usd":"bad","duration_ms":"bad","num_turns":1.5}',
+    ]) ingestClaudeStreamLine(accumulator, line);
+    expect(snapshotClaudeStream(accumulator)).toEqual({ progressTail: [], terminal: 'success' });
+  });
+
+  it('normalizes missing, direct, unknown, and non-string error subtypes', () => {
+    const cases = [
+      ['{"type":"error","subtype":"api_error"}', 'claude-failed'],
+      ['{"type":"error","error":{}}', 'claude-failed'],
+      ['{"type":"error","subtype":"future_error"}', 'claude-failed'],
+      ['{"type":"result","subtype":42,"is_error":true}', 'claude-failed'],
+    ] as const;
+    for (const [line, code] of cases) {
+      const accumulator = createClaudeStreamAccumulator();
+      ingestClaudeStreamLine(accumulator, line);
+      expect(snapshotClaudeStream(accumulator).error?.code).toBe(code);
+    }
+  });
 });
