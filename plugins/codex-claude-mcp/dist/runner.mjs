@@ -5310,7 +5310,7 @@ async function executeRunner(options) {
     let version;
     phase = "preflight";
     try {
-      version = await runChild(["--version"], { env: environment, shell: false, stdio: ["ignore", "pipe", "pipe"], windowsHide: true }, true);
+      version = await runChild(["--version"], { cwd: "/", env: environment, shell: false, stdio: ["ignore", "pipe", "pipe"], windowsHide: true }, true);
     } catch {
       await safelyPublishFailure(store, options.jobId, "claude-not-found");
       return;

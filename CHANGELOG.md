@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2026-08-27
+
+### Fixed
+
+- Run the detached runner's Claude version preflight from a stable working directory so model tasks also survive Codex marketplace cache refreshes.
+
 ## [0.1.1] - 2026-08-27
 
 ### Fixed
@@ -19,5 +25,6 @@ All notable changes to this project will be documented here. The format follows 
 - Sanitized CLI health/version/feature/authentication readiness checks.
 - Codex plugin, discoverable bridge skill, abstract violet/cyan icon set, Git marketplace, documentation, CI, deterministic release archive, checksum, and CycloneDX SBOM.
 
+[0.1.2]: https://github.com/Cyruskraad/codex-claude-mcp/releases/tag/v0.1.2
 [0.1.1]: https://github.com/Cyruskraad/codex-claude-mcp/releases/tag/v0.1.1
 [0.1.0]: https://github.com/Cyruskraad/codex-claude-mcp/releases/tag/v0.1.0

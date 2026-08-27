@@ -108,7 +108,7 @@ async function runServerUntilStdioEof(
 describe('built MCP protocol', () => {
   it('initializes with durable-work instructions and exactly seven accurately annotated tools', async () => {
     await withProtocolClient(async (client) => {
-      expect(client.getServerVersion()).toEqual({ name: 'codex-claude-mcp', version: '0.1.1' });
+      expect(client.getServerVersion()).toEqual({ name: 'codex-claude-mcp', version: '0.1.2' });
       expect(client.getServerCapabilities()).toMatchObject({ tools: {} });
       const instructions = client.getInstructions() ?? '';
       expect(instructions).toContain('claude_health');

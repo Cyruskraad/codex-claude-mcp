@@ -3,7 +3,7 @@ import { lstat, readFile, readdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import process from 'node:process';
 
-const VERSION = '0.1.1';
+const VERSION = '0.1.2';
 const EXPECTED_ASSETS = {
   composerIcon: './assets/composer-icon.png',
   logo: './assets/logo.png',

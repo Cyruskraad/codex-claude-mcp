@@ -23276,7 +23276,7 @@ var SERVER_INSTRUCTIONS = [
 ].join(" ");
 function createClaudeMcpServer(dependencies) {
   const server = new McpServer(
-    { name: "codex-claude-mcp", version: "0.1.1" },
+    { name: "codex-claude-mcp", version: "0.1.2" },
     { instructions: SERVER_INSTRUCTIONS, capabilities: { tools: {} } }
   );
   server.registerTool("claude_health", {

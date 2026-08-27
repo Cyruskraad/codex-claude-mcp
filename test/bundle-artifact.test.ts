@@ -80,7 +80,7 @@ describe('self-contained production bundles', () => {
 
   it('initializes the MCP server when its bundle is invoked through a symlink alias', async () => {
     await expect(initializeAliasedServer(join(bundleDirectory, 'server.mjs'))).resolves.toEqual({
-      name: 'codex-claude-mcp', version: '0.1.1',
+      name: 'codex-claude-mcp', version: '0.1.2',
     });
   });
 

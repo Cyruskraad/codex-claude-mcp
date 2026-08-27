@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import process from 'node:process';
 
-const VERSION = '0.1.1';
+const VERSION = '0.1.2';
 const RELEASE_NAME = `codex-claude-mcp-v${VERSION}`;
 const FIXED_TIME = new Date('1980-01-01T00:00:00.000Z');
 const PACKAGE_FILES = [

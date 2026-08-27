@@ -44,6 +44,17 @@ async function setup(scenario: string, overrides: Record<string, unknown> = {}) 
 }
 
 describe('detached Claude runner integration', () => {
+  it('runs the version preflight from the stable POSIX root', async () => {
+    const { root, store, running } = await setup('success');
+    const record = join(root, 'version-probe.json');
+    process.env.FAKE_RUNNER_PROBE_RECORD = record;
+
+    await executeRunner({ store, jobId: running.job.id, runnerToken: 'runner_token', claudePath: fakeClaude });
+
+    expect(JSON.parse(await readFile(record, 'utf8'))).toEqual({ argv: ['--version'], cwd: '/' });
+    expect((await store.read(running.job.id)).job.state).toBe('succeeded');
+  });
+
   it('validates version, sends exact argv/stdin, deletes request, and publishes normalized success', async () => {
     const { control, store, running } = await setup('success', { session: { mode: 'resume', session_id: 'sess_original' } });
     await executeRunner({ store, jobId: running.job.id, runnerToken: 'runner_token', claudePath: fakeClaude });

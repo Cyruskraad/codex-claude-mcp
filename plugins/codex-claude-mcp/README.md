@@ -1,6 +1,6 @@
 # Claude Code Bridge
 
-This plugin contains the self-contained local stdio MCP server, detached runner, Codex skill, and UI assets for Claude Code Bridge v0.1.1.
+This plugin contains the self-contained local stdio MCP server, detached runner, Codex skill, and UI assets for Claude Code Bridge v0.1.2.
 
 It requires Node.js 20.19+ and an installed, authenticated Claude Code CLI 2.1.0+. Run `claude_health` before starting work. Inspection is the default; write access must be explicitly authorized and targets a real Git worktree using Claude Code's `acceptEdits` mode. That mode auto-approves file edits and common filesystem commands Claude classifies in the workspace; other commands and protected paths retain ordinary permission checks.
 

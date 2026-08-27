@@ -15,6 +15,14 @@ if (process.env.FAKE_HEALTH_PROBE_RECORD) {
   );
 }
 
+if (process.argv.includes('--version') && process.env.FAKE_RUNNER_PROBE_RECORD) {
+  await writeFile(
+    process.env.FAKE_RUNNER_PROBE_RECORD,
+    JSON.stringify({ argv: process.argv.slice(2), cwd: process.cwd() }),
+    { mode: 0o600 },
+  );
+}
+
 if (process.argv.includes('--version')) {
   if (process.env.FAKE_VERSION_SCENARIO === 'flood') {
     process.stdout.write(Buffer.alloc(4097, 118));

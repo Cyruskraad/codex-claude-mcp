@@ -158,7 +158,7 @@ export async function executeRunner(options: ExecuteRunnerOptions): Promise<void
   try {
     let version;
     phase = 'preflight';
-    try { version = await runChild(['--version'], { env: environment, shell: false, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true }, true); }
+    try { version = await runChild(['--version'], { cwd: '/', env: environment, shell: false, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true }, true); }
     catch { await safelyPublishFailure(store, options.jobId, 'claude-not-found'); return; }
     await stopping;
     if (intent || stopRequested) { await store.finalizeTerminalIntent(options.jobId); return; }
